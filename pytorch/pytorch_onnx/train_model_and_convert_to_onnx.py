@@ -13,36 +13,62 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-import onnx
 import onnxruntime as ort
 import numpy as np
 from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, Subset
-import os
+from torch.utils.data import DataLoader, random_split
+from typing import Tuple
 
 # Step 1: Model Creation
 class SimpleNN(nn.Module):
     def __init__(self):
         super(SimpleNN, self).__init__()
-        self.fc1 = nn.Linear(28 * 28, 128)
-        self.fc2 = nn.Linear(128, 10)
+        self.model = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(28 * 28, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 10)
+        )
         
     def forward(self, x):
-        x = x.view(-1, 28 * 28)  # Flatten the input
-        x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-    
-def train_model():
-    # Load MNIST dataset
+        return self.model(x)
+
+def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimizer: optim.Optimizer) -> float:
+    model.train()
+    running_loss = 0.0
+    for inputs, labels in loader:
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+    return running_loss / len(loader)
+
+def validate_model(model: nn.Module, loader: DataLoader, criterion: nn.Module) -> Tuple[float, float]:
+    model.eval()
+    val_loss = 0.0
+    all_preds = []
+    all_labels = []
+    with torch.no_grad():
+        for inputs, labels in loader:
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            val_loss += loss.item()
+            preds = torch.argmax(outputs, dim=1)
+            all_preds.extend(preds.numpy())
+            all_labels.extend(labels.numpy())
+    accuracy = accuracy_score(all_labels, all_preds)
+    return val_loss / len(loader), accuracy
+
+def train_model() -> nn.Module:
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
     dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
     
-    # Split dataset into training and validation sets
-    train_indices, val_indices = train_test_split(range(len(dataset)), test_size=0.2, random_state=42)
-    train_subset = Subset(dataset, train_indices)
-    val_subset = Subset(dataset, val_indices)
+    train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_subset, val_subset = random_split(dataset, [train_size, val_size])
     
     train_loader = DataLoader(train_subset, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_subset, batch_size=64, shuffle=False)
@@ -51,79 +77,65 @@ def train_model():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
-    # Training loop
-    model.train()
-    for epoch in range(2):  # Train for 2 epochs
-        running_loss = 0.0
-        for inputs, labels in train_loader:
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item()
-        print(f"Epoch {epoch+1}, Loss: {running_loss/len(train_loader)}")
-        
-        # Validation loop
-        model.eval()
-        val_loss = 0.0
-        all_preds = []
-        all_labels = []
-        with torch.no_grad():
-            for inputs, labels in val_loader:
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-                preds = torch.argmax(outputs, dim=1)
-                all_preds.extend(preds.numpy())
-                all_labels.extend(labels.numpy())
-        val_accuracy = accuracy_score(all_labels, all_preds)
-        print(f"Validation Loss: {val_loss/len(val_loader)}, Validation Accuracy: {val_accuracy * 100:.2f}%")
-        model.train()
+    for epoch in range(5):
+        train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
+        val_loss, val_accuracy = validate_model(model, val_loader, criterion)
+        print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy * 100:.2f}%")
     
     return model
 
 # Step 2: ONNX Export
-def export_to_onnx(model, filepath="model.onnx"):
-    dummy_input = torch.randn(1, 1, 28, 28)  # MNIST input size
+def export_to_onnx(model: nn.Module, filepath: str = "model.onnx") -> None:
+    dummy_input = torch.randn(1, 1, 28, 28)
     torch.onnx.export(model, dummy_input, filepath, input_names=['input'], output_names=['output'], opset_version=11)
     print(f"Model exported to {filepath}")
 
-# Step 3: Model Loading and Step 4: Inference Execution
-def run_inference_with_onnx(onnx_model_path, test_loader):
-    # Load ONNX model
+# Step 3 & 4: Inference and Comparison
+def run_inference_with_onnx_and_compare(onnx_model_path: str, test_loader: DataLoader, pytorch_model: nn.Module) -> None:
     ort_session = ort.InferenceSession(onnx_model_path)
-    
-    # Perform inference
     ort_inputs = {ort_session.get_inputs()[0].name: None}
-    all_preds = []
+    all_onnx_preds = []
+    all_pytorch_preds = []
     all_labels = []
     
-    for inputs, labels in test_loader:
-        ort_inputs[ort_session.get_inputs()[0].name] = inputs.numpy()
-        ort_outs = ort_session.run(None, ort_inputs)
-        preds = np.argmax(ort_outs[0], axis=1)
-        all_preds.extend(preds)
-        all_labels.extend(labels.numpy())
+    pytorch_model.eval()
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            pytorch_preds = torch.argmax(pytorch_model(inputs), dim=1).numpy()
+            all_pytorch_preds.extend(pytorch_preds)
+            
+            ort_inputs[ort_session.get_inputs()[0].name] = inputs.numpy()
+            ort_outs = ort_session.run(None, ort_inputs)
+            onnx_preds = np.argmax(ort_outs[0], axis=1)
+            all_onnx_preds.extend(onnx_preds)
+            
+            all_labels.extend(labels.numpy())
     
-    accuracy = accuracy_score(all_labels, all_preds)
-    print(f"ONNX Model Accuracy: {accuracy * 100:.2f}%")
+    identical = np.array_equal(all_pytorch_preds, all_onnx_preds)
+    print(f"Are PyTorch and ONNX predictions identical? {identical}")
+    
+    if not identical:
+        for i, (p, o, l) in enumerate(zip(all_pytorch_preds, all_onnx_preds, all_labels)):
+            if p != o:
+                print(f"Mismatch at index {i}: PyTorch={p}, ONNX={o}, Label={l}")
+        raise ValueError("Predictions from PyTorch and ONNX models do not match!")
+    
+    pytorch_accuracy = accuracy_score(all_labels, all_pytorch_preds)
+    onnx_accuracy = accuracy_score(all_labels, all_onnx_preds)
+    print(f"PyTorch Model Accuracy: {pytorch_accuracy * 100:.2f}%")
+    print(f"ONNX Model Accuracy: {onnx_accuracy * 100:.2f}%")
 
-def main():
-    # Train PyTorch model
+def main() -> None:
     model = train_model()
-    
-    # Export to ONNX
     onnx_model_path = "model.onnx"
     export_to_onnx(model, onnx_model_path)
     
-    # Load MNIST test dataset
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
     test_dataset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
     
-    # Run inference with ONNX model
-    run_inference_with_onnx(onnx_model_path, test_loader)
+    run_inference_with_onnx_and_compare(onnx_model_path, test_loader, model)
+    print("Model 'model.onnx': ONNX model inference matches PyTorch model inference successfully.")
 
 if __name__ == "__main__":
     main()
