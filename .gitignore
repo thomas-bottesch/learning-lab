@@ -205,3 +205,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Any file in any folder called .bash_history should be ignored
+**/.bash_history
