@@ -19,6 +19,7 @@ from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, random_split
 from typing import Tuple
 
+
 # Step 1: Model Creation
 class SimpleNN(nn.Module):
     def __init__(self):
@@ -28,13 +29,26 @@ class SimpleNN(nn.Module):
             nn.Linear(28 * 28, 128),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(128, 10)
+            nn.Linear(128, 10),
         )
-        
+
     def forward(self, x):
+        # integrate preprocessing into the model so ONNX handles it:
+        # - input is expected as uint8 image [0,255] (shape [N,1,28,28])
+        # - convert to float, scale to [0,1], then normalize to [-1,1] (same as (x/255 - 0.5)/0.5)
+        if x.dtype != torch.float32:
+            x = x.to(torch.float32)
+            x = x / 255.0
+            x = (x - 0.5) / 0.5
         return self.model(x)
 
-def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, optimizer: optim.Optimizer) -> float:
+
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: optim.Optimizer,
+) -> float:
     model.train()
     running_loss = 0.0
     for inputs, labels in loader:
@@ -46,7 +60,10 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module, 
         running_loss += loss.item()
     return running_loss / len(loader)
 
-def validate_model(model: nn.Module, loader: DataLoader, criterion: nn.Module) -> Tuple[float, float]:
+
+def validate_model(
+    model: nn.Module, loader: DataLoader, criterion: nn.Module
+) -> Tuple[float, float]:
     model.eval()
     val_loss = 0.0
     all_preds = []
@@ -62,80 +79,108 @@ def validate_model(model: nn.Module, loader: DataLoader, criterion: nn.Module) -
     accuracy = accuracy_score(all_labels, all_preds)
     return val_loss / len(loader), accuracy
 
+
 def train_model() -> nn.Module:
-    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
-    dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
-    
+    # use PILToTensor so dataset yields uint8 tensors (0-255) and model does normalization
+    transform = transforms.PILToTensor()
+    dataset = torchvision.datasets.MNIST(
+        root="./data", train=True, download=True, transform=transform
+    )
+
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_subset, val_subset = random_split(dataset, [train_size, val_size])
-    
+
     train_loader = DataLoader(train_subset, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_subset, batch_size=64, shuffle=False)
-    
+
     model = SimpleNN()
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
-    
+
     for epoch in range(5):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
         val_loss, val_accuracy = validate_model(model, val_loader, criterion)
-        print(f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy * 100:.2f}%")
-    
+        print(
+            f"Epoch {epoch+1}, Train Loss: {train_loss:.4f}, Validation Loss: "
+            f"{val_loss:.4f}, Validation Accuracy: {val_accuracy * 100:.2f}%"
+        )
+
     return model
+
 
 # Step 2: ONNX Export
 def export_to_onnx(model: nn.Module, filepath: str = "model.onnx") -> None:
-    dummy_input = torch.randn(1, 1, 28, 28)
-    torch.onnx.export(model, dummy_input, filepath, input_names=['input'], output_names=['output'], opset_version=11)
+    # export with a uint8 dummy input so the preprocessing (Cast/Div/Sub) is included in ONNX
+    dummy_input = torch.randint(0, 256, (1, 1, 28, 28), dtype=torch.uint8)
+    torch.onnx.export(
+        model,
+        dummy_input,
+        filepath,
+        input_names=["input"],
+        output_names=["output"],
+        opset_version=11,
+    )
     print(f"Model exported to {filepath}")
 
+
 # Step 3 & 4: Inference and Comparison
-def run_inference_with_onnx_and_compare(onnx_model_path: str, test_loader: DataLoader, pytorch_model: nn.Module) -> None:
+def run_inference_with_onnx_and_compare(
+    onnx_model_path: str, test_loader: DataLoader, pytorch_model: nn.Module
+) -> None:
     ort_session = ort.InferenceSession(onnx_model_path)
     ort_inputs = {ort_session.get_inputs()[0].name: None}
     all_onnx_preds = []
     all_pytorch_preds = []
     all_labels = []
-    
+
     pytorch_model.eval()
     with torch.no_grad():
         for inputs, labels in test_loader:
             pytorch_preds = torch.argmax(pytorch_model(inputs), dim=1).numpy()
             all_pytorch_preds.extend(pytorch_preds)
-            
+
             ort_inputs[ort_session.get_inputs()[0].name] = inputs.numpy()
             ort_outs = ort_session.run(None, ort_inputs)
             onnx_preds = np.argmax(ort_outs[0], axis=1)
             all_onnx_preds.extend(onnx_preds)
-            
+
             all_labels.extend(labels.numpy())
-    
+
     identical = np.array_equal(all_pytorch_preds, all_onnx_preds)
     print(f"Are PyTorch and ONNX predictions identical? {identical}")
-    
+
     if not identical:
-        for i, (p, o, l) in enumerate(zip(all_pytorch_preds, all_onnx_preds, all_labels)):
+        for i, (p, o, l) in enumerate(
+            zip(all_pytorch_preds, all_onnx_preds, all_labels)
+        ):
             if p != o:
                 print(f"Mismatch at index {i}: PyTorch={p}, ONNX={o}, Label={l}")
         raise ValueError("Predictions from PyTorch and ONNX models do not match!")
-    
+
     pytorch_accuracy = accuracy_score(all_labels, all_pytorch_preds)
     onnx_accuracy = accuracy_score(all_labels, all_onnx_preds)
     print(f"PyTorch Model Accuracy: {pytorch_accuracy * 100:.2f}%")
     print(f"ONNX Model Accuracy: {onnx_accuracy * 100:.2f}%")
 
+
 def main() -> None:
     model = train_model()
     onnx_model_path = "model.onnx"
     export_to_onnx(model, onnx_model_path)
-    
-    transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
-    test_dataset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+
+    # use the same PILToTensor transform for test dataset (no extra normalization step required)
+    transform = transforms.PILToTensor()
+    test_dataset = torchvision.datasets.MNIST(
+        root="./data", train=False, download=True, transform=transform
+    )
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
-    
+
     run_inference_with_onnx_and_compare(onnx_model_path, test_loader, model)
-    print("Model 'model.onnx': ONNX model inference matches PyTorch model inference successfully.")
+    print(
+        "Model 'model.onnx': ONNX model inference matches PyTorch model inference successfully."
+    )
+
 
 if __name__ == "__main__":
     main()

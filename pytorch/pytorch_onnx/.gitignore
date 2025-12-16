@@ -1,3 +1,4 @@
 # Add data folder from current directory
 data/
+custom_onnx_runtime/
 model.onnx

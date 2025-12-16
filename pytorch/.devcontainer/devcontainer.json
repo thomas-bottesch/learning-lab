@@ -16,7 +16,8 @@
 	"extensions": [
 		"ms-python.python",
 		"ms-toolsai.jupyter",
-		"eamodio.gitlens"
+		"eamodio.gitlens",
+		"ms-python.black-formatter"
 	],
 	"runArgs": [
         "--net", "host", "--gpus=all", "--device=/dev/dri:/dev/dri"
