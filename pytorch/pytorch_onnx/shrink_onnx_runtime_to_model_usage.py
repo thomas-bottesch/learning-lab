@@ -106,7 +106,6 @@ def shrink_onnx_runtime(model_path: str, output_dir: str) -> None:
     print(f"To use this runtime, set LD_LIBRARY_PATH to: {lib_path}")
 
     # strip --strip-unneeded libonnxruntime.so
-
     for item in os.listdir(lib_path):
         if item.startswith("libonnxruntime") and item.endswith(".so"):
             lib_file = os.path.join(lib_path, item)

@@ -96,9 +96,10 @@ static unsigned char* load_mnist_labels(const char* path, int* out_count) {
 
 int main(int argc, char** argv) {
     /* Pointers */
-    const char* model_path = NULL;
-    const char* images_path = NULL;
-    const char* labels_path = NULL;
+    const char *model_path  = "custom_onnx_runtime/model.ort";
+    const char *images_path = "data/MNIST/raw/t10k-images-idx3-ubyte";
+    const char *labels_path = "data/MNIST/raw/t10k-labels-idx1-ubyte";
+
     char* input_name = NULL;
     char* output_name = NULL;
     unsigned char* images = NULL;
@@ -107,6 +108,7 @@ int main(int argc, char** argv) {
     const char* output_names[1];
     const OrtValue* input_values[1];
     float* outarr = NULL;
+    FILE* csv_file = NULL;
 
     /* ONNX Runtime objects */
     OrtEnv* env = NULL;
@@ -138,16 +140,6 @@ int main(int argc, char** argv) {
 
     /* Floats */
     float bestv = 0.0f;
-
-    if (argc < 4) {
-        fprintf(stderr, "Usage: %s model.onnx t10k-images-idx3-ubyte "
-                        "t10k-labels-idx1-ubyte\n", argv[0]);
-        return 1;
-    }
-
-    model_path = argv[1];
-    images_path = argv[2];
-    labels_path = argv[3];
 
     g_ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
 
@@ -267,7 +259,25 @@ int main(int argc, char** argv) {
     correct = 0;
     mismatches_reported = 0;
 
-    for (i = 0; i < 1; ++i) {
+    /* Open CSV file for writing predictions */
+    csv_file = fopen("c_predictions.csv", "w");
+    if (!csv_file) {
+        fprintf(stderr, "Failed to open CSV file for writing\n");
+        free(images);
+        free(labels);
+        g_ort->ReleaseMemoryInfo(mem_info);
+        status = g_ort->AllocatorFree(allocator, input_name);
+        if (status != NULL) g_ort->ReleaseStatus(status);
+        status = g_ort->AllocatorFree(allocator, output_name);
+        if (status != NULL) g_ort->ReleaseStatus(status);
+        g_ort->ReleaseSession(session);
+        g_ort->ReleaseSessionOptions(session_options);
+        g_ort->ReleaseEnv(env);
+        return 1;
+    }
+    fprintf(csv_file, "index,prediction,label,top_logit\n");
+
+    for (i = 0; i < img_count; ++i) {
         unsigned char* img_ptr = images + (size_t)i * input_size;
 
         input_tensor = NULL;
@@ -318,10 +328,14 @@ int main(int argc, char** argv) {
             }
         }
         true_label = labels[i];
+        
+        /* Write to CSV */
+        fprintf(csv_file, "%d,%d,%d,%.6f\n", i, best, true_label, bestv);
+        
         if (best == true_label) ++correct;
         else {
             if (mismatches_reported < 10) {
-                printf("Mismatch idx %d: pred=%d label=%d\n", i, best, true_label);
+                printf("Mismatch idx %d: pred=%d label=%d (logit=%.6f)\n", i, best, true_label, bestv);
                 mismatches_reported++;
             }
         }
@@ -329,6 +343,9 @@ int main(int argc, char** argv) {
         g_ort->ReleaseValue(output_tensor);
         g_ort->ReleaseValue(input_tensor);
     }
+
+    fclose(csv_file);
+    printf("Predictions written to c_predictions.csv\n");
 
     printf("Processed %d images. Accuracy: %.2f%% (%lu/%d)\n", img_count, 
            (double)correct * 100.0 / (double)img_count, 

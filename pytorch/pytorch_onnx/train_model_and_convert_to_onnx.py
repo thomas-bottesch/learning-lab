@@ -1,4 +1,4 @@
-# This file is supposed to do the following steps:
+# This file is represents the following steps:
 # 1. **Model Creation**: Build a machine learning model using PyTorch.
 #    - For simplicity, we can use the mnist dataset with a simple feedforward neural network.
 # 2. **ONNX Export**: Convert the PyTorch model to the ONNX format.
@@ -15,6 +15,7 @@ import torchvision
 import torchvision.transforms as transforms
 import onnxruntime as ort
 import numpy as np
+import csv
 from sklearn.metrics import accuracy_score
 from torch.utils.data import DataLoader, random_split
 from typing import Tuple
@@ -98,7 +99,7 @@ def train_model() -> nn.Module:
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    for epoch in range(5):
+    for epoch in range(20):
         train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
         val_loss, val_accuracy = validate_model(model, val_loader, criterion)
         print(
@@ -131,31 +132,62 @@ def run_inference_with_onnx_and_compare(
     ort_session = ort.InferenceSession(onnx_model_path)
     ort_inputs = {ort_session.get_inputs()[0].name: None}
     all_onnx_preds = []
+    all_onnx_top_logits = []
     all_pytorch_preds = []
+    all_pytorch_top_logits = []
     all_labels = []
 
     pytorch_model.eval()
     with torch.no_grad():
         for inputs, labels in test_loader:
-            pytorch_preds = torch.argmax(pytorch_model(inputs), dim=1).numpy()
-            all_pytorch_preds.extend(pytorch_preds)
+            # PyTorch outputs (logits)
+            pt_outputs = pytorch_model(inputs)
+            pt_out_np = pt_outputs.detach().numpy()
+            pytorch_preds = np.argmax(pt_out_np, axis=1)
+            pytorch_top_logits = pt_out_np[np.arange(len(pytorch_preds)), pytorch_preds]
+            all_pytorch_preds.extend(pytorch_preds.tolist())
+            all_pytorch_top_logits.extend(pytorch_top_logits.tolist())
 
+            # ONNX Runtime outputs (logits)
             ort_inputs[ort_session.get_inputs()[0].name] = inputs.numpy()
             ort_outs = ort_session.run(None, ort_inputs)
-            onnx_preds = np.argmax(ort_outs[0], axis=1)
-            all_onnx_preds.extend(onnx_preds)
+            onnx_out = ort_outs[0]
+            onnx_preds = np.argmax(onnx_out, axis=1)
+            onnx_top_logits = onnx_out[np.arange(len(onnx_preds)), onnx_preds]
+            all_onnx_preds.extend(onnx_preds.tolist())
+            all_onnx_top_logits.extend(onnx_top_logits.tolist())
 
-            all_labels.extend(labels.numpy())
+            all_labels.extend(labels.numpy().tolist())
+
+    # Write predictions to CSV (index,prediction,label,top_logit)
+    csv_path = "python_predictions.csv"
+    with open(csv_path, "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["index", "prediction", "label", "top_logit"])
+        for i, (pred, label, top_logit) in enumerate(
+            zip(all_onnx_preds, all_labels, all_onnx_top_logits)
+        ):
+            writer.writerow([i, int(pred), int(label), float(f"{top_logit:.6f}")])
+    print(f"Predictions written to {csv_path}")
 
     identical = np.array_equal(all_pytorch_preds, all_onnx_preds)
     print(f"Are PyTorch and ONNX predictions identical? {identical}")
 
     if not identical:
-        for i, (p, o, l) in enumerate(
-            zip(all_pytorch_preds, all_onnx_preds, all_labels)
+        for i, (p, o, l, p_logit, o_logit) in enumerate(
+            zip(
+                all_pytorch_preds,
+                all_onnx_preds,
+                all_labels,
+                all_pytorch_top_logits,
+                all_onnx_top_logits,
+            )
         ):
             if p != o:
-                print(f"Mismatch at index {i}: PyTorch={p}, ONNX={o}, Label={l}")
+                print(
+                    f"Mismatch at index {i}: PyTorch={p} (logit={p_logit:.6f}), "
+                    f"ONNX={o} (logit={o_logit:.6f}), Label={l}"
+                )
         raise ValueError("Predictions from PyTorch and ONNX models do not match!")
 
     pytorch_accuracy = accuracy_score(all_labels, all_pytorch_preds)

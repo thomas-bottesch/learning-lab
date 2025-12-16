@@ -209,3 +209,5 @@ __marimo__/
 # Any file in any folder called .bash_history should be ignored
 **/.bash_history
 pytorch/pytorch_onnx/mnist_onnx_infer
+pytorch/pytorch_onnx/python_predictions.csv
+pytorch/pytorch_onnx/c_predictions.csv
