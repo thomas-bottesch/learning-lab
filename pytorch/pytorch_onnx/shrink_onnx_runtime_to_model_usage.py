@@ -1,3 +1,9 @@
+# This file is represents the following steps:
+# 1. **Convert model**: Analyze the ONNX model to determine which operators are used and generate a configuration file listing these operators.
+# 2. **Build Custom ONNX Runtime**: Use the generated configuration to build a custom minimal ONNX Runtime that includes only the necessary operators for the model.
+# 3. **Strip Unneeded Symbols**: Optimize the resulting shared library by stripping unneeded symbols to reduce size.
+
+
 import os
 import subprocess
 import onnx

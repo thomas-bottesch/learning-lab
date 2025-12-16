@@ -1,6 +1,12 @@
 /*
-Minimal C program that loads an ONNX model with ONNX Runtime C API
-and runs inference over the MNIST test set stored in IDX format.
+This file is represents the following steps:
+- 1. **Compare**: Load and initialize the ONNX Runtime C API.
+- 2. **Load Data**: Load the MNIST test dataset (images and labels) from the specified files.
+- 3. **Create Session**: Create an ONNX Runtime session to run inference on the provided model.
+- 4. **Prepare Input**: Prepare the input tensor for each image in the MNIST dataset.
+- 5. **Run Inference**: Execute the model on the input tensor and obtain the output tensor.
+- 6. **Process Output**: Extract the predicted class from the output tensor and compare it with the true label.
+- 7. **Report Results**: Print the accuracy of the model on the MNIST test dataset and log predictions to a CSV file.
 */ 
 
 #include <stdio.h>
