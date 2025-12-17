@@ -4,8 +4,7 @@
 		"dockerfile": "Dockerfile",
 		"context": "..",
 	},
-
-	"settings": { 
+	"settings": {
 		"terminal.integrated.shell.linux": "/bin/bash",
 		"python.pythonPath": "/opt/venv/bin/python",
 		"editor.formatOnSave": true, // Enable format on save
@@ -13,7 +12,6 @@
 			"editor.defaultFormatter": "ms-python.black-formatter" // Set Black as the default formatter for Python
 		}
 	},
-
 	"extensions": [
 		"ms-python.python",
 		"ms-toolsai.jupyter",
@@ -21,9 +19,11 @@
 		"ms-python.black-formatter"
 	],
 	"runArgs": [
-		"--net", "host", "--gpus=all", "--device=/dev/dri:/dev/dri"
+		"--net",
+		"host",
+		"--gpus=all",
+		"--device=/dev/dri:/dev/dri"
 	],
-
 	"containerEnv": {
 		"DISPLAY": ":1",
 		"NVIDIA_VISIBLE_DEVICES": "all",
@@ -37,6 +37,5 @@
 		"source=/dev/nvidiactl,target=/dev/nvidiactl,type=bind",
 		"source=${localWorkspaceFolder}/.devcontainer/bash_history/.bash_history,target=/home/vscode/.bash_history,type=bind,consistency=cached"
 	],
-
 	"remoteUser": "vscode"
 }

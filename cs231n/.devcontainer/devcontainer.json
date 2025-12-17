@@ -1,0 +1,30 @@
+{
+	"name": "cs231n",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": "..",
+	},
+	"settings": {
+		"terminal.integrated.shell.linux": "/bin/bash",
+		"python.defaultInterpreterPath": "/opt/venv/bin/python",
+		"python.terminal.activateEnvironment": true,
+		"editor.formatOnSave": true, // Enable format on save
+		"[python]": {
+			"editor.defaultFormatter": "ms-python.black-formatter" // Set Black as the default formatter for Python
+		}
+	},
+	"extensions": [
+		"ms-python.python",
+		"ms-toolsai.jupyter",
+		"eamodio.gitlens",
+		"ms-python.black-formatter"
+	],
+	"runArgs": [
+		"--net",
+		"host"
+	],
+	"mounts": [
+		"source=${localWorkspaceFolder}/.devcontainer/bash_history/.bash_history,target=/home/vscode/.bash_history,type=bind,consistency=cached"
+	],
+	"remoteUser": "vscode"
+}

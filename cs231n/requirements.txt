@@ -1,0 +1,7 @@
+ipykernel
+numpy
+scipy
+matplotlib
+jupyter
+imageio
+future
