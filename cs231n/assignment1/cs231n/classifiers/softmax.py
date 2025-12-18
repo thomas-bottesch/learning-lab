@@ -31,28 +31,23 @@ def softmax_loss_naive(W, X, y, reg):
     num_train = X.shape[0]
     for i in range(num_train):
         scores = X[i].dot(W)
-
         # compute the probabilities in numerically stable way
         scores -= np.max(scores)
         p = np.exp(scores)
         p /= p.sum()  # normalize
         logp = np.log(p)
-
         loss -= logp[y[i]]  # negative log probability is the loss
 
+        # Gradient calculation
+        for j in range(num_classes):
+            if j == y[i]:
+                dW[:, j] += (p[j] - 1) * X[i]
+            else:
+                dW[:, j] += p[j] * X[i]
 
-    # normalized hinge loss plus regularization
+    # Average loss and gradient, add regularization
     loss = loss / num_train + reg * np.sum(W * W)
-
-    #############################################################################
-    # TODO:                                                                     #
-    # Compute the gradient of the loss function and store it dW.                #
-    # Rather that first computing the loss and then computing the derivative,   #
-    # it may be simpler to compute the derivative at the same time that the     #
-    # loss is being computed. As a result you may need to modify some of the    #
-    # code above to compute the gradient.                                       #
-    #############################################################################
-
+    dW = dW / num_train + 2 * reg * W
 
     return loss, dW
 
@@ -66,14 +61,38 @@ def softmax_loss_vectorized(W, X, y, reg):
     # Initialize the loss and gradient to zero.
     loss = 0.0
     dW = np.zeros_like(W)
-
-
+    num_train = X.shape[0]
+    num_classes = W.shape[1]
     #############################################################################
     # TODO:                                                                     #
     # Implement a vectorized version of the softmax loss, storing the           #
     # result in loss.                                                           #
     #############################################################################
 
+    XW = X.dot(W).T
+    scores = XW - np.max(XW, axis=1)
+    p = np.exp(scores)
+    p /= np.sum(p, axis=0)
+    logp = np.log(p)
+    loss = -np.sum(logp.T[np.arange(len(y)), y])
+    loss = loss / num_train + reg * np.sum(W * W)
+
+    # for every element in y determine the position of the correct class in
+    # num_classes. This will also be the correct position where to add into the
+    # vector dW
+    D = np.searchsorted(range(num_classes), y)
+
+    # A we know ftom the previous implementation this dW[:, j] += p[j] * X[i]
+    # happens for every sample no matter what. Only if the label of the sample
+    # equals the desired label there is something additional to do
+    # so we do:
+    dW = p.dot(X)
+
+    # Now the additional part. We have to subtract X[i] from W[i] in line D
+    # We are basically doing this dW[:, j] += -X[i]
+    np.add.at(dW, D, -X)
+
+    dW = dW.T / num_train + 2 * reg * W
 
     #############################################################################
     # TODO:                                                                     #
@@ -84,6 +103,5 @@ def softmax_loss_vectorized(W, X, y, reg):
     # to reuse some of the intermediate values that you used to compute the     #
     # loss.                                                                     #
     #############################################################################
-
 
     return loss, dW
