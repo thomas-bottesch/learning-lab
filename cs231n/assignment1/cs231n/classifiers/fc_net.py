@@ -30,6 +30,7 @@ class TwoLayerNet(object):
         num_classes=10,
         weight_scale=1e-3,
         reg=0.0,
+        dropout_keep_ratio=1,
     ):
         """
         Initialize a new network.
@@ -45,6 +46,12 @@ class TwoLayerNet(object):
         self.params = {}
         self.reg = reg
 
+        self.use_dropout = dropout_keep_ratio != 1
+
+        self.dropout_param = {}
+        if self.use_dropout:
+            self.dropout_param = {"mode": "train", "p": dropout_keep_ratio}
+
         ############################################################################
         # TODO: Initialize the weights and biases of the two-layer net. Weights    #
         # should be initialized from a Gaussian centered at 0.0 with               #
@@ -54,6 +61,16 @@ class TwoLayerNet(object):
         # and biases using the keys 'W1' and 'b1' and second layer                 #
         # weights and biases using the keys 'W2' and 'b2'.                         #
         ############################################################################
+
+        self.params["b1"] = 0
+        self.params["W1"] = np.random.normal(
+            loc=0.0, scale=weight_scale, size=(input_dim, hidden_dim)
+        )
+
+        self.params["b2"] = 0
+        self.params["W2"] = np.random.normal(
+            loc=0.0, scale=weight_scale, size=(hidden_dim, num_classes)
+        )
 
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -84,6 +101,23 @@ class TwoLayerNet(object):
         # class scores for X and storing them in the scores variable.              #
         ############################################################################
 
+        affine1_out, affine1_cache = affine_forward(
+            X, self.params["W1"], self.params["b1"]
+        )
+        relu1_out, relu1_cache = relu_forward(affine1_out)
+        if self.dropout_param:
+            dropout1_out, dropout1_cache = dropout_forward(
+                relu1_out, dropout_param=self.dropout_param
+            )
+            affine_2_input = dropout1_out
+        else:
+            affine_2_input = relu1_out
+        affine2_out, affine2_cache = affine_forward(
+            affine_2_input, self.params["W2"], self.params["b2"]
+        )
+
+        scores = affine2_out
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -104,6 +138,25 @@ class TwoLayerNet(object):
         # of 0.5 to simplify the expression for the gradient.                      #
         ############################################################################
 
+        loss, dout_softmax = softmax_loss(affine2_out, y)
+        dout_affine2, dw2, db2 = affine_backward(dout_softmax, affine2_cache)
+        grads["b2"] = db2
+        grads["W2"] = dw2 + self.reg * self.params["W2"]
+        dout_relu1 = relu_backward(dout_affine2, relu1_cache)
+
+        if self.dropout_param:
+            dropout1_out = dropout_backward(dout_relu1, cache=dropout1_cache)
+            affine_2_back_input = dropout1_out
+        else:
+            affine_2_back_input = dout_relu1
+
+        dout_affine1, dw1, db1 = affine_backward(affine_2_back_input, affine1_cache)
+        grads["b1"] = db1
+        grads["W1"] = dw1 + self.reg * self.params["W1"]
+
+        loss += 0.5 * self.reg * np.sum(self.params["W1"] ** 2)
+        loss += 0.5 * self.reg * np.sum(self.params["W2"] ** 2)
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -111,24 +164,23 @@ class TwoLayerNet(object):
         return loss, grads
 
     def save(self, fname):
-      """Save model parameters."""
-      fpath = os.path.join(os.path.dirname(__file__), "../saved/", fname)
-      params = self.params
-      np.save(fpath, params)
-      print(fname, "saved.")
-    
-    def load(self, fname):
-      """Load model parameters."""
-      fpath = os.path.join(os.path.dirname(__file__), "../saved/", fname)
-      if not os.path.exists(fpath):
-        print(fname, "not available.")
-        return False
-      else:
-        params = np.load(fpath, allow_pickle=True).item()
-        self.params = params
-        print(fname, "loaded.")
-        return True
+        """Save model parameters."""
+        fpath = os.path.join(os.path.dirname(__file__), "../saved/", fname)
+        params = self.params
+        np.save(fpath, params)
+        print(fname, "saved.")
 
+    def load(self, fname):
+        """Load model parameters."""
+        fpath = os.path.join(os.path.dirname(__file__), "../saved/", fname)
+        if not os.path.exists(fpath):
+            print(fname, "not available.")
+            return False
+        else:
+            params = np.load(fpath, allow_pickle=True).item()
+            self.params = params
+            print(fname, "loaded.")
+            return True
 
 
 class FullyConnectedNet(object):
@@ -228,7 +280,7 @@ class FullyConnectedNet(object):
 
     def loss(self, X, y=None):
         """Compute loss and gradient for the fully connected net.
-        
+
         Inputs:
         - X: Array of input data of shape (N, d_1, ..., d_k)
         - y: Array of labels, of shape (N,). y[i] gives the label for X[i].
@@ -297,22 +349,21 @@ class FullyConnectedNet(object):
 
         return loss, grads
 
-
     def save(self, fname):
-      """Save model parameters."""
-      fpath = os.path.join(os.path.dirname(__file__), "../saved/", fname)
-      params = self.params
-      np.save(fpath, params)
-      print(fname, "saved.")
-    
+        """Save model parameters."""
+        fpath = os.path.join(os.path.dirname(__file__), "../saved/", fname)
+        params = self.params
+        np.save(fpath, params)
+        print(fname, "saved.")
+
     def load(self, fname):
-      """Load model parameters."""
-      fpath = os.path.join(os.path.dirname(__file__), "../saved/", fname)
-      if not os.path.exists(fpath):
-        print(fname, "not available.")
-        return False
-      else:
-        params = np.load(fpath, allow_pickle=True).item()
-        self.params = params
-        print(fname, "loaded.")
-        return True
+        """Load model parameters."""
+        fpath = os.path.join(os.path.dirname(__file__), "../saved/", fname)
+        if not os.path.exists(fpath):
+            print(fname, "not available.")
+            return False
+        else:
+            params = np.load(fpath, allow_pickle=True).item()
+            self.params = params
+            print(fname, "loaded.")
+            return True

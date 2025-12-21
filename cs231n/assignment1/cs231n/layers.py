@@ -27,7 +27,8 @@ def affine_forward(x, w, b):
     # TODO: Implement the affine forward pass. Store the result in out. You   #
     # will need to reshape the input into rows.                               #
     ###########################################################################
-
+    _x = x.reshape((x.shape[0], np.prod(x.shape[1:])))
+    out = np.dot(_x, w) + b
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -57,6 +58,20 @@ def affine_backward(dout, cache):
     # TODO: Implement the affine backward pass.                               #
     ###########################################################################
 
+    _x = x.reshape((x.shape[0], np.prod(x.shape[1:])))
+
+    # dz / dx = w
+    # dL / dz (upstream gradient)
+    # dL / dx = (dL / dz).dot(w.T)
+    dx = dout.dot(w.T).reshape(x.shape)
+
+    # dz / dw = x
+    # dL / dz (upstream gradient)
+    # dL / dw = x.T.dot((dL / dz))
+    dw = _x.T.dot(dout)
+
+    # dL / db = sum{1...N} dL/z_i
+    db = np.sum(dout, axis=0)
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -78,6 +93,9 @@ def relu_forward(x):
     ###########################################################################
     # TODO: Implement the ReLU forward pass.                                  #
     ###########################################################################
+
+    out = x.copy()
+    out[out < 0] = 0
 
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -101,6 +119,9 @@ def relu_backward(dout, cache):
     ###########################################################################
     # TODO: Implement the ReLU backward pass.                                 #
     ###########################################################################
+
+    dx = dout.copy()
+    dx[x <= 0] = 0
 
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -375,7 +396,10 @@ def dropout_forward(x, dropout_param):
         # TODO: Implement training phase forward pass for inverted dropout.   #
         # Store the dropout mask in the mask variable.                        #
         #######################################################################
-        pass
+
+        mask = (np.random.rand(*x.shape) < p) / p
+        out = x * mask
+
         #######################################################################
         #                           END OF YOUR CODE                          #
         #######################################################################
@@ -383,7 +407,7 @@ def dropout_forward(x, dropout_param):
         #######################################################################
         # TODO: Implement the test phase forward pass for inverted dropout.   #
         #######################################################################
-        pass
+        out = x
         #######################################################################
         #                            END OF YOUR CODE                         #
         #######################################################################
@@ -410,7 +434,7 @@ def dropout_backward(dout, cache):
         #######################################################################
         # TODO: Implement training phase backward pass for inverted dropout   #
         #######################################################################
-        pass
+        dx = dout * mask
         #######################################################################
         #                          END OF YOUR CODE                           #
         #######################################################################
@@ -715,6 +739,16 @@ def softmax_loss(x, y):
     # TODO: Copy over your solution from A1.
     ###########################################################################
 
+    num_train = x.shape[0]
+    scores = x - np.max(x, axis=1, keepdims=True)
+    Z = np.sum(np.exp(scores), axis=1, keepdims=True)
+    log_probs = scores - np.log(Z)
+    probs = np.exp(log_probs)
+    loss = -np.sum(log_probs[np.arange(num_train), y]) / num_train
+
+    dx = probs.copy()
+    dx[np.arange(num_train), y] -= 1
+    dx = dx / num_train
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
