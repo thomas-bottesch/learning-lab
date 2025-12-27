@@ -250,6 +250,19 @@ class FullyConnectedNet(object):
         # parameters should be initialized to zeros.                               #
         ############################################################################
 
+        previous_dim = input_dim
+        for i in range(1, self.num_layers):
+            self.params[f"b{i}"] = np.zeros(hidden_dims[i - 1])
+            self.params[f"W{i}"] = np.random.normal(
+                loc=0.0, scale=weight_scale, size=(previous_dim, hidden_dims[i - 1])
+            )
+            previous_dim = hidden_dims[i - 1]
+
+        self.params[f"b{self.num_layers}"] = np.zeros(num_classes)
+        self.params[f"W{self.num_layers}"] = np.random.normal(
+            loc=0.0, scale=weight_scale, size=(previous_dim, num_classes)
+        )
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -320,6 +333,31 @@ class FullyConnectedNet(object):
         # layer, etc.                                                              #
         ############################################################################
 
+        previous_output = X
+        cache = {}
+        for i in range(1, self.num_layers):
+            previous_output, affine_cache = affine_forward(
+                previous_output, self.params[f"W{i}"], self.params[f"b{i}"]
+            )
+            cache[f"affine{i}"] = affine_cache
+            previous_output, relu_cache = relu_forward(previous_output)
+            cache[f"relu_cache{i}"] = relu_cache
+            if self.dropout_param:
+                dropout1_out, dropout_cache = dropout_forward(
+                    previous_output, dropout_param=self.dropout_param
+                )
+                cache[f"dropout_cache{i}"] = dropout_cache
+                previous_output = dropout1_out
+
+        affine2_out, affine_cache = affine_forward(
+            previous_output,
+            self.params[f"W{self.num_layers}"],
+            self.params[f"b{self.num_layers}"],
+        )
+        cache[f"affine{self.num_layers}"] = affine_cache
+
+        scores = affine2_out
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -342,6 +380,33 @@ class FullyConnectedNet(object):
         # automated tests, make sure that your L2 regularization includes a factor #
         # of 0.5 to simplify the expression for the gradient.                      #
         ############################################################################
+
+        loss, dout_softmax = softmax_loss(affine2_out, y)
+        dout_upstream, dw, db = affine_backward(
+            dout_softmax, cache[f"affine{self.num_layers}"]
+        )
+        grads[f"b{self.num_layers}"] = db
+        grads[f"W{self.num_layers}"] = (
+            dw + self.reg * self.params[f"W{self.num_layers}"]
+        )
+
+        loss += 0.5 * self.reg * np.sum(self.params[f"W{self.num_layers}"] ** 2)
+
+        for i in reversed(range(1, self.num_layers)):
+            dout_upstream = relu_backward(dout_upstream, cache[f"relu_cache{i}"])
+
+            if self.dropout_param:
+                dout_upstream = dropout_backward(
+                    dout_upstream, cache=cache[f"dropout_cache{i}"]
+                )
+
+            dout_upstream, dw1, db1 = affine_backward(
+                dout_upstream, cache[f"affine{i}"]
+            )
+            grads[f"b{i}"] = db1
+            grads[f"W{i}"] = dw1 + self.reg * self.params[f"W{i}"]
+
+            loss += 0.5 * self.reg * np.sum(self.params[f"W{i}"] ** 2)
 
         ############################################################################
         #                             END OF YOUR CODE                             #
