@@ -198,7 +198,34 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         # Referencing the original paper (https://arxiv.org/abs/1502.03167)   #
         # might prove to be helpful.                                          #
         #######################################################################
-        pass
+        # Compute output
+        mu = x.mean(axis=0)
+
+        # Center x
+        xc = x - mu
+
+        # Calculate variance
+        var = np.mean(xc**2, axis=0)
+
+        # Calculate std
+        std = np.sqrt(var + eps)
+
+        # Normalize x
+        xn = xc / std
+
+        # Calculate the batch norm
+        out = gamma * xn + beta
+
+        cache = (x, gamma, xc, std, xn)
+
+        # Update running average of mean
+        running_mean *= momentum
+        running_mean += (1 - momentum) * mu
+
+        # Update running average of variance
+        running_var *= momentum
+        running_var += (1 - momentum) * var
+
         #######################################################################
         #                           END OF YOUR CODE                          #
         #######################################################################
@@ -209,7 +236,9 @@ def batchnorm_forward(x, gamma, beta, bn_param):
         # then scale and shift the normalized data using gamma and beta.      #
         # Store the result in the out variable.                               #
         #######################################################################
-        pass
+        std = np.sqrt(running_var + eps)
+        xn = (x - running_mean) / std
+        out = gamma * xn + beta
         #######################################################################
         #                          END OF YOUR CODE                           #
         #######################################################################
@@ -248,6 +277,19 @@ def batchnorm_backward(dout, cache):
     # might prove to be helpful.                                              #
     ###########################################################################
 
+    x, gamma, xc, std, xn = cache
+
+    N = x.shape[0]
+    dbeta = dout.sum(axis=0)
+    dgamma = np.sum(xn * dout, axis=0)
+    dxn = gamma * dout
+    dxc = dxn / std
+    dstd = -np.sum((dxn * xc) / (std * std), axis=0)
+    dvar = 0.5 * dstd / std
+    dxc += (2.0 / N) * xc * dvar
+    dmu = np.sum(dxc, axis=0)
+    dx = dxc - dmu / N
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -278,6 +320,19 @@ def batchnorm_backward_alt(dout, cache):
     # should be able to compute gradients with respect to the inputs in a     #
     # single statement; our implementation fits on a single 80-character line.#
     ###########################################################################
+
+    x, gamma, xc, std, xn = cache
+    N = x.shape[0]
+
+    dbeta = dout.sum(axis=0)
+    dgamma = np.sum(xn * dout, axis=0)
+
+    dx = (
+        (1.0 / N)
+        * gamma
+        * (std**-1)
+        * (N * dout - dout.sum(axis=0) - xn * (dout * xn).sum(axis=0))
+    )
 
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -321,6 +376,21 @@ def layernorm_forward(x, gamma, beta, ln_param):
     # the batch norm code and leave it almost unchanged?                      #
     ###########################################################################
 
+    # Compute mean for each data point (across features)
+    mu = np.mean(x, axis=1, keepdims=True)  # (N, 1)
+    # Center the input by subtracting mean
+    xc = x - mu  # (N, D)
+    # Compute variance for each data point (across features)
+    var = np.mean(xc**2, axis=1, keepdims=True)  # (N, 1)
+    # Compute standard deviation for each data point
+    std = np.sqrt(var + eps)  # (N, 1)
+    # Normalize the centered input
+    xn = xc / std  # (N, D)
+    # Scale and shift the normalized input
+    out = gamma * xn + beta  # broadcast (N, D)
+    # Store values needed for backward pass
+    cache = (x, gamma, xc, std, xn)
+
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################
@@ -351,6 +421,22 @@ def layernorm_backward(dout, cache):
     # implementation of batch normalization. The hints to the forward pass    #
     # still apply!                                                            #
     ###########################################################################
+
+    x, gamma, xc, std, xn = cache
+    N, D = x.shape
+    # Gradients for gamma and beta (broadcasted)
+    dbeta = np.sum(dout, axis=0)
+    dgamma = np.sum(xn * dout, axis=0)
+    # Gradient w.r.t. normalized input
+    dxn = dout * gamma
+    # Layer norm: statistics are per data point (across features)
+    # So, axis=1 for mean/var/std
+    dxc = dxn / std
+    dstd = -np.sum((dxn * xc) / (std**2), axis=1, keepdims=True)
+    dvar = 0.5 * dstd / std
+    dxc += (2.0 / D) * xc * dvar
+    dmu = np.sum(dxc, axis=1, keepdims=True)
+    dx = dxc - dmu / D
 
     ###########################################################################
     #                             END OF YOUR CODE                            #
