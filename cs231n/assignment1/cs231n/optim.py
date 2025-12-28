@@ -97,12 +97,18 @@ def rmsprop(w, dw, config=None):
     config.setdefault("epsilon", 1e-8)
     config.setdefault("cache", np.zeros_like(w))
 
-    next_w = None
     ###########################################################################
     # TODO: Implement the RMSprop update formula, storing the next value of w #
     # in the next_w variable. Don't forget to update cache value stored in    #
     # config['cache'].                                                        #
     ###########################################################################
+
+    config["cache"] = (
+        config["decay_rate"] * config["cache"] + (1 - config["decay_rate"]) * dw**2
+    )
+    next_w = w - config["learning_rate"] * dw / (
+        np.sqrt(config["cache"]) + config["epsilon"]
+    )
 
     ###########################################################################
     #                             END OF YOUR CODE                            #
@@ -143,7 +149,16 @@ def adam(w, dw, config=None):
     #                                                                         #
     # NOTE: In order to match the reference output, please modify t _before_  #
     # using it in any calculations.                                           #
-    ###########################################################################
+    ##########################
+
+    # increment iteration before doing the calculations
+    config["t"] += 1
+
+    config["m"] = config["beta1"] * config["m"] + (1 - config["beta1"]) * dw
+    mt = config["m"] / (1 - config["beta1"] ** config["t"])
+    config["v"] = config["beta2"] * config["v"] + (1 - config["beta2"]) * (dw**2)
+    vt = config["v"] / (1 - config["beta2"] ** config["t"])
+    next_w = w - (config["learning_rate"] * mt / (np.sqrt(vt) + config["epsilon"]))
 
     ###########################################################################
     #                             END OF YOUR CODE                            #
