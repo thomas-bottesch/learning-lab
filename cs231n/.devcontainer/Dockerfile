@@ -54,7 +54,7 @@ RUN python -m venv ${VIRTUAL_ENV} \
 
 # Install base Python deps into the venv
 COPY requirements.txt /tmp/requirements.txt
-RUN ${VIRTUAL_ENV}/bin/pip install -r /tmp/requirements.txt \
+RUN ${VIRTUAL_ENV}/bin/pip install -r /tmp/requirements.txt --index-url https://download.pytorch.org/whl/cu118 \
     && rm /tmp/requirements.txt
 
 # give user permission to the venv
