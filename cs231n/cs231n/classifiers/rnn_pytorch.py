@@ -138,7 +138,25 @@ class CaptioningRNN:
         #                                                                          #
         # You also don't have to implement the backward pass.                      #
         ############################################################################
-        # 
+
+        # (1) Initial hidden state from image features
+        h0 = features @ W_proj + b_proj  # (N, H)
+
+        # (2) Word embedding for captions_in
+        x = W_embed[captions_in]  # (N, T, W)
+
+        # (3) RNN/LSTM forward
+        if self.cell_type == "rnn":
+            h = rnn_forward(x, h0, Wx, Wh, b)  # (N, T, H)
+        else:
+            h = lstm_forward(x, h0, Wx, Wh, b)  # (N, T, H)
+
+        # (4) Temporal affine transformation to get scores
+        scores = temporal_affine_forward(h, W_vocab, b_vocab)  # (N, T, V)
+
+        # (5) Temporal softmax loss
+        loss = temporal_softmax_loss(scores, captions_out, mask)
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -202,7 +220,41 @@ class CaptioningRNN:
         # NOTE: we are still working over minibatches in this function. Also if   #
         # you are using an LSTM, initialize the first cell state to zeros.        #
         ###########################################################################
-        # 
+
+        # (1) Initialize hidden state
+        h = features @ W_proj + b_proj  # (N, H)
+
+        # (2) For LSTM, initialize cell state
+        if self.cell_type == "lstm":
+            c = torch.zeros_like(h)
+
+        # (3) Initialize input word as <START>
+        prev_word = torch.full(
+            (N,), self._start, dtype=torch.long, device=features.device
+        )
+
+        for t in range(max_length):
+            # (1) Embed previous word
+            x = W_embed[prev_word]  # (N, W)
+
+            # (2) RNN/LSTM step
+            if self.cell_type == "rnn":
+                h = rnn_step_forward(x, h, Wx, Wh, b)  # (N, H)
+            else:
+                h, c = lstm_step_forward(x, h, c, Wx, Wh, b)  # (N, H), (N, H)
+
+            # (3) Compute scores for all words
+            scores = h @ W_vocab + b_vocab  # (N, V)
+
+            # (4) Select the word with the highest score
+            next_word = torch.argmax(scores, dim=1)  # (N,)
+
+            # Write to captions
+            captions[:, t] = next_word
+
+            # Prepare for next timestep
+            prev_word = next_word
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################

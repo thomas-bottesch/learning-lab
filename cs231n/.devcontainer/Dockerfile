@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     git \
     wget \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Make `python` point to `python3`
@@ -54,7 +55,7 @@ RUN python -m venv ${VIRTUAL_ENV} \
 
 # Install base Python deps into the venv
 COPY requirements.txt /tmp/requirements.txt
-RUN ${VIRTUAL_ENV}/bin/pip install -r /tmp/requirements.txt --index-url https://download.pytorch.org/whl/cu118 \
+RUN ${VIRTUAL_ENV}/bin/pip install -r /tmp/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118 \
     && rm /tmp/requirements.txt
 
 # give user permission to the venv

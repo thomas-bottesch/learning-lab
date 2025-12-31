@@ -2,15 +2,15 @@
 	"name": "cs231n",
 	"build": {
 		"dockerfile": "Dockerfile",
-		"context": "..",
+		"context": ".."
 	},
 	"settings": {
 		"terminal.integrated.shell.linux": "/bin/bash",
 		"python.defaultInterpreterPath": "/opt/venv/bin/python",
 		"python.terminal.activateEnvironment": true,
-		"editor.formatOnSave": true, // Enable format on save
+		"editor.formatOnSave": true,
 		"[python]": {
-			"editor.defaultFormatter": "ms-python.black-formatter" // Set Black as the default formatter for Python
+			"editor.defaultFormatter": "ms-python.black-formatter"
 		}
 	},
 	"extensions": [
