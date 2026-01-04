@@ -7,12 +7,14 @@ import math
 This file defines layer types that are commonly used for transformers.
 """
 
+
 class PositionalEncoding(nn.Module):
     """
     Encodes information about the positions of the tokens in the sequence. In
     this case, the layer has no learnable parameters, since it is a simple
     function of sines and cosines.
     """
+
     def __init__(self, embed_dim, dropout=0.1, max_len=5000):
         """
         Construct the PositionalEncoding layer.
@@ -37,13 +39,38 @@ class PositionalEncoding(nn.Module):
         # less than 5 lines of code.                                               #
         ############################################################################
 
+        # Create a tensor of positions (0, 1, ..., max_len-1) as a column vector
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        # Compute the denominator term for the positional encoding formula (for even indices)
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2).float() * (-math.log(10000.0) / embed_dim)
+        )
+        # Apply sine to even indices in the embedding dimension
+        # Before pe for small example (max_len=3), (embedded_dim=4):
+        # tensor([[0., 0., 0., 0.],
+        #         [0., 0., 0., 0.],
+        #         [0., 0., 0., 0.]])
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        # After pe:
+        #    tensor([[0.0000,  0.0000,  0.0000,  0.0000],
+        #            [0.8415,  0.0000,  0.0100,  0.0000],
+        #            [0.9093,  0.0000,  0.0200,  0.0000]])
+
+        # Apply cosine to odd indices in the embedding dimension
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+
+        # After cosine pe:
+        #    tensor([[0.0000,  1.0000,  0.0000,  1.0000],
+        #            [0.8415,  0.5403,  0.0100,  0.9999],
+        #            [0.9093, -0.4161,  0.0200,  0.9998]])
+
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
 
         # Make sure the positional encodings will be saved with the model
         # parameters (mostly for completeness).
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x):
         """
@@ -65,6 +92,15 @@ class PositionalEncoding(nn.Module):
         # afterward. This should only take a few lines of code.                    #
         ############################################################################
 
+        # Assuming pe is:
+        #    tensor([[0.0000,  1.0000,  0.0000,  1.0000],
+        #            [0.8415,  0.5403,  0.0100,  0.9999],
+        #            [0.9093, -0.4161,  0.0200,  0.9998]])
+
+        # Then self.pe[:, :S, :] selects S rows of pe. For S=3 this would be:
+        #    tensor([[0.0000,  1.0000,  0.0000,  1.0000],
+        #            [0.8415,  0.5403,  0.0100,  0.9999]])
+        output = self.dropout(x + self.pe[:, :S, :])
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -109,14 +145,20 @@ class MultiHeadAttention(nn.Module):
         self.query = nn.Linear(embed_dim, embed_dim)
         self.value = nn.Linear(embed_dim, embed_dim)
         self.proj = nn.Linear(embed_dim, embed_dim)
-        
+
         self.attn_drop = nn.Dropout(dropout)
 
         self.n_head = num_heads
         self.emd_dim = embed_dim
         self.head_dim = self.emd_dim // self.n_head
 
-    def forward(self, query, key, value, attn_mask=None):
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        attn_mask: torch.Tensor | None = None,
+    ):
         """
         Calculate the masked attention output for the provided data, computing
         all attention heads in parallel.
@@ -155,6 +197,39 @@ class MultiHeadAttention(nn.Module):
         #     prevent a value from influencing output. Specifically, the PyTorch   #
         #     function masked_fill may come in handy.                              #
         ############################################################################
+
+        # Compute key, query and value matrices from sequences
+        K = self.key(key).view(N, T, self.n_head, self.head_dim).transpose(1, 2)
+        Q = self.query(query).view(N, S, self.n_head, self.head_dim).transpose(1, 2)
+        V = self.value(value).view(N, T, self.n_head, self.head_dim).transpose(1, 2)
+
+        # (N,H,S,D/H) @ (N,H,D/H,T) -> (N,H,S,T)
+        scores = torch.matmul(Q, K.transpose(2, 3)) / math.sqrt(self.head_dim)
+
+        if attn_mask is not None:
+
+            # attn_mask == 0:
+            # Creates a boolean tensor of shape (S, T) where each entry is True if the
+            # corresponding entry in attn_mask is 0 (meaning "mask out" this position),
+            # and False otherwise.
+
+            # .unsqueeze(0):
+            # Adds a new dimension at the front, changing the shape from (S, T) to (1, S, T).
+
+            # Another .unsqueeze(0):
+            # Adds another new dimension at the front, changing the
+            # shape from (1, S, T) to (1, 1, S, T)
+
+            # the mask can be broadcasted across all batches (N) and heads (H), so it can
+            # be directly used in scores.masked_fill
+            scores = scores.masked_fill(
+                (attn_mask == 0).unsqueeze(0).unsqueeze(0), float("-inf")
+            )
+
+        # (N,H,S,T) @ (N,H,T,D/H) -> (N,H,S,D/H)
+        scores = self.attn_drop(F.softmax(scores, dim=-1))
+        scores = torch.matmul(scores, V)
+        output = self.proj(scores.transpose(1, 2).contiguous().view(N, S, E))
 
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -202,6 +277,7 @@ class TransformerDecoderLayer(nn.Module):
     """
     A single layer of a Transformer decoder, to be used with TransformerDecoder.
     """
+
     def __init__(self, input_dim, num_heads, dim_feedforward=2048, dropout=0.1):
         """
         Construct a TransformerDecoderLayer instance.
@@ -224,7 +300,6 @@ class TransformerDecoderLayer(nn.Module):
         self.dropout_self = nn.Dropout(dropout)
         self.dropout_cross = nn.Dropout(dropout)
         self.dropout_ffn = nn.Dropout(dropout)
-
 
     def forward(self, tgt, memory, tgt_mask=None):
         """
@@ -271,6 +346,7 @@ class PatchEmbedding(nn.Module):
     - in_channels: Number of input image channels (e.g., 3 for RGB).
     - embed_dim: Dimension of the linear embedding space.
     """
+
     def __init__(self, img_size, patch_size, in_channels=3, embed_dim=128):
         super().__init__()
 
@@ -279,14 +355,15 @@ class PatchEmbedding(nn.Module):
         self.in_channels = in_channels
         self.embed_dim = embed_dim
 
-        assert img_size % patch_size == 0, "Image dimensions must be divisible by the patch size."
+        assert (
+            img_size % patch_size == 0
+        ), "Image dimensions must be divisible by the patch size."
 
         self.num_patches = (img_size // patch_size) ** 2
         self.patch_dim = patch_size * patch_size * in_channels
 
         # Linear projection of flattened patches to the embedding dimension
         self.proj = nn.Linear(self.patch_dim, embed_dim)
-
 
     def forward(self, x):
         """
@@ -299,8 +376,9 @@ class PatchEmbedding(nn.Module):
         - out: Patch embeddings with shape (N, num_patches, embed_dim)
         """
         N, C, H, W = x.shape
-        assert H == self.img_size and W == self.img_size, \
-            f"Expected image size ({self.img_size}, {self.img_size}), but got ({H}, {W})"
+        assert (
+            H == self.img_size and W == self.img_size
+        ), f"Expected image size ({self.img_size}, {self.img_size}), but got ({H}, {W})"
         out = torch.zeros(N, self.embed_dim)
 
         ############################################################################
@@ -318,12 +396,11 @@ class PatchEmbedding(nn.Module):
         return out
 
 
-
-
 class TransformerEncoderLayer(nn.Module):
     """
     A single layer of a Transformer encoder, to be used with TransformerEncoder.
     """
+
     def __init__(self, input_dim, num_heads, dim_feedforward=2048, dropout=0.1):
         """
         Construct a TransformerEncoderLayer instance.
