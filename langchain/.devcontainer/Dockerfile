@@ -39,10 +39,16 @@ RUN apt-get update && apt-get install -y \
     git \
     wget \
     unzip \
+    screen \
+    curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Make `python` point to `python3`
 RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# Install Ollama
+RUN curl -fsSL https://ollama.com/install.sh | bash
 
 # ------------------------------
 # Option B: venv OUTSIDE workspace
@@ -58,10 +64,16 @@ RUN python -m venv ${VIRTUAL_ENV} \
 COPY requirements.txt /tmp/requirements.txt
 
 USER ${MY_USERNAME}
-RUN ${VIRTUAL_ENV}/bin/pip install -r /tmp/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118 \
-    && rm /tmp/requirements.txt
+
+RUN echo 'export HISTFILE=/home/vscode/.bash_history' >> ~/.bashrc \
+    && echo 'shopt -s histappend' >> ~/.bashrc \
+    && echo 'PROMPT_COMMAND="history -a; history -n; $PROMPT_COMMAND"' >> ~/.bashrc
+
+RUN ${VIRTUAL_ENV}/bin/pip install -r /tmp/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu118
 
 USER root
+
+RUN rm /tmp/requirements.txt
 
 # ------------------------------
 # Do NOT set WORKDIR to /workspaces/*

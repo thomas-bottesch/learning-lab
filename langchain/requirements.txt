@@ -1,0 +1,17 @@
+langchain>=1.2.0,<2.0
+langchain-community>=0.4.1
+langchain-ollama>=1.0.1
+
+# For loading PDFs & text files
+pypdf
+unstructured
+
+# For web scraping
+beautifulsoup4
+lxml
+
+# For vector search (local)
+faiss-cpu
+
+# Useful utilities
+python-dotenv

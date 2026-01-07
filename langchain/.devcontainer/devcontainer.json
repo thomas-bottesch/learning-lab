@@ -1,0 +1,45 @@
+{
+	"name": "langchain",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".."
+	},
+	"settings": {
+		"terminal.integrated.shell.linux": "/bin/bash",
+		"terminal.integrated.shellArgs.linux": [
+			"-l"
+		],
+		"python.defaultInterpreterPath": "/opt/venv/bin/python",
+		"python.terminal.activateEnvironment": true,
+		"editor.formatOnSave": true,
+		"[python]": {
+			"editor.defaultFormatter": "ms-python.black-formatter"
+		}
+	},
+	"extensions": [
+		"ms-python.python",
+		"ms-toolsai.jupyter",
+		"eamodio.gitlens",
+		"ms-python.black-formatter"
+	],
+	"runArgs": [
+		"--net",
+		"host",
+		"--gpus=all",
+		"--device=/dev/dri:/dev/dri"
+	],
+	"containerEnv": {
+		"DISPLAY": ":1",
+		"NVIDIA_VISIBLE_DEVICES": "all",
+		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics",
+		"OLLAMA_MODELS": "${containerWorkspaceFolder}/ollama_models"
+	},
+	"mounts": [
+		"source=/usr/lib/x86_64-linux-gnu/nvidia,target=/usr/lib/x86_64-linux-gnu/nvidia,type=bind,consistency=cached",
+		"source=/usr/lib/nvidia,target=/usr/lib/nvidia,type=bind,consistency=cached",
+		"source=/dev/nvidia0,target=/dev/nvidia0,type=bind",
+		"source=/dev/nvidiactl,target=/dev/nvidiactl,type=bind",
+		"source=${localWorkspaceFolder}/.devcontainer/bash_history/.bash_history,target=/home/vscode/.bash_history,type=bind,consistency=cached"
+	],
+	"remoteUser": "vscode"
+}
