@@ -22,17 +22,28 @@ torch.backends.quantized.engine = "fbgemm"
 
 
 class SimpleNN(nn.Module):
-    def __init__(self, fc1_out=256, fc2_out=128, fc3_out=64):
+    def __init__(
+        self,
+        fc1_out=256,
+        fc2_out=128,
+        fc3_out=64,
+        dropout_p1=0.2,
+        dropout_p2=0.3,
+        dropout_p3=0.2,
+    ):
         super(SimpleNN, self).__init__()
         # Expects input already normalized to [-1, 1] range as float32
         self.quant = torch.quantization.QuantStub()
         self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(28 * 28, fc1_out)
         self.relu1 = nn.ReLU()
+        self.dropout1 = nn.Dropout(dropout_p1)
         self.fc2 = nn.Linear(fc1_out, fc2_out)
         self.relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(dropout_p2)
         self.fc3 = nn.Linear(fc2_out, fc3_out)
         self.relu3 = nn.ReLU()
+        self.dropout3 = nn.Dropout(dropout_p3)
         self.fc4 = nn.Linear(fc3_out, 10)
         self.dequant = torch.quantization.DeQuantStub()
 
@@ -42,10 +53,13 @@ class SimpleNN(nn.Module):
         x = self.flatten(x)
         x = self.fc1(x)
         x = self.relu1(x)
+        x = self.dropout1(x)
         x = self.fc2(x)
         x = self.relu2(x)
+        x = self.dropout2(x)
         x = self.fc3(x)
         x = self.relu3(x)
+        x = self.dropout3(x)
         x = self.fc4(x)
         x = self.dequant(x)
         return x
@@ -183,8 +197,26 @@ def clone_model(model: nn.Module) -> nn.Module:
     except AttributeError:
         fc3_out = model.fc3[0].out_features
 
+    # Detect dropout probabilities (if present)
+    try:
+        dropout_p1 = model.dropout1.p
+        dropout_p2 = model.dropout2.p
+        dropout_p3 = model.dropout3.p
+    except AttributeError:
+        # Default dropout probabilities if not found
+        dropout_p1 = 0.2
+        dropout_p2 = 0.3
+        dropout_p3 = 0.2
+
     # Create new model with same architecture
-    cloned = SimpleNN(fc1_out=fc1_out, fc2_out=fc2_out, fc3_out=fc3_out)
+    cloned = SimpleNN(
+        fc1_out=fc1_out,
+        fc2_out=fc2_out,
+        fc3_out=fc3_out,
+        dropout_p1=dropout_p1,
+        dropout_p2=dropout_p2,
+        dropout_p3=dropout_p3,
+    )
 
     # Load the state dict (use strict=False for QAT models to handle observer/quant differences)
     cloned.load_state_dict(model.state_dict(), strict=False)
@@ -196,6 +228,7 @@ def prepare_qat_model(float_model: nn.Module) -> nn.Module:
     """Prepare model for Quantization-Aware Training (QAT)."""
 
     # Fuse Linear and ReLU layers for better QAT/quantization performance
+    # Note: Dropout layers are NOT fused - they're automatically disabled during eval()
     torch.quantization.fuse_modules(
         float_model,
         [["fc1", "relu1"], ["fc2", "relu2"], ["fc3", "relu3"]],
@@ -226,6 +259,32 @@ def prepare_qat_model(float_model: nn.Module) -> nn.Module:
     torch.quantization.prepare_qat(float_model, inplace=True)
     print("Model prepared for QAT.")
     return float_model
+
+
+def train_model(
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: optim.Optimizer,
+    num_epochs: int,
+    step_name: str = "",
+    observer_freeze_epoch: int = None,
+    verbose: bool = True,
+) -> nn.Module:
+    """General training loop for DRY principle."""
+    for epoch in range(num_epochs):
+        train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
+        val_loss, val_accuracy = validate_model(model, val_loader, criterion)
+        if verbose:
+            print(
+                f"{step_name} Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, "
+                f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy * 100:.2f}%"
+            )
+        if observer_freeze_epoch is not None and epoch == observer_freeze_epoch:
+            model.apply(torch.quantization.disable_observer)
+            print("Observers frozen for stable quantization parameters.")
+    return model
 
 
 def train_one_epoch(
@@ -283,36 +342,47 @@ def evaluate_model(model: nn.Module, loader: DataLoader) -> float:
 
 
 def main() -> None:
-    # Configuration
-    # Adjust these values as needed for your experiment
     initial_epochs = 25  # Initial training epochs
     finetune_epochs = 10  # Fine-tuning epochs after pruning
     qat_epochs = 10  # QAT epochs
     prune_amount = 0.5  # Fraction of output neurons to prune in each Linear layer
 
-    # Prepare data
-    # Preprocessing pipeline: PIL image -> Tensor -> Float32 -> Normalize to [-1, 1]
-    # This preprocessing will need to be replicated in C code on the MCU
-    # TODO: we must avoid vonverting from int8 -> float -> int8 in the MCU
-    # Work is needed to avoid this!
-    transform = transforms.Compose(
+    # Data augmentation for training
+    train_transform = transforms.Compose(
         [
+            transforms.RandomRotation(10),
+            transforms.RandomAffine(0, translate=(0.1, 0.1)),
             transforms.PILToTensor(),
             transforms.ConvertImageDtype(torch.float32),
-            transforms.Normalize((0.5,), (0.5,)),  # (x/255 - 0.5) / 0.5 = [-1, 1]
         ]
     )
 
-    train_dataset = torchvision.datasets.MNIST(
-        root="./data", train=True, download=True, transform=transform
-    )
-    test_dataset = torchvision.datasets.MNIST(
-        root="./data", train=False, download=True, transform=transform
+    # Preprocessing pipeline: PIL image -> Tensor -> Float32 -> Normalize to [-1, 1]
+    # This preprocessing will need to be replicated in C code on the MCU
+    # TODO: we must avoid converting from int8 -> float -> int8 in the MCU
+    # Work is needed to avoid this!
+    eval_transform = transforms.Compose(
+        [
+            transforms.PILToTensor(),
+            transforms.ConvertImageDtype(torch.float32),
+        ]
     )
 
-    train_size = int(0.8 * len(train_dataset))
-    val_size = len(train_dataset) - train_size
-    train_subset, val_subset = random_split(train_dataset, [train_size, val_size])
+    full_train_dataset = torchvision.datasets.MNIST(
+        root="./data", train=True, download=True, transform=train_transform
+    )
+    # For validation, use the same images but with eval_transform
+    val_dataset = torchvision.datasets.MNIST(
+        root="./data", train=True, download=True, transform=eval_transform
+    )
+    test_dataset = torchvision.datasets.MNIST(
+        root="./data", train=False, download=True, transform=eval_transform
+    )
+
+    train_size = int(0.8 * len(full_train_dataset))
+    val_size = len(full_train_dataset) - train_size
+    train_subset, _ = random_split(full_train_dataset, [train_size, val_size])
+    _, val_subset = random_split(val_dataset, [train_size, val_size])
 
     train_loader = DataLoader(train_subset, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_subset, batch_size=64, shuffle=False)
@@ -321,114 +391,139 @@ def main() -> None:
     criterion = nn.CrossEntropyLoss()
 
     # ====== STEP 1: Train initial float model ======
-    print("\n" + "=" * 60)
-    print("STEP 1: Training initial float model")
-    print("=" * 60)
-
-    model = SimpleNN()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-    for epoch in range(initial_epochs):
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
-        val_loss, val_accuracy = validate_model(model, val_loader, criterion)
-        print(
-            f"Epoch {epoch+1}/{initial_epochs}, Train Loss: {train_loss:.4f}, "
-            f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy * 100:.2f}%"
+    float_model_path = f"/tmp/float_model_{initial_epochs}"
+    if os.path.exists(float_model_path):
+        print(f"Step 1: Model already exists at {float_model_path}, skipping training.")
+        model = SimpleNN()
+        model.load_state_dict(torch.load(float_model_path))
+        float_model_initial = clone_model(model)
+    else:
+        print("\n" + "=" * 60)
+        print("STEP 1: Training initial float model")
+        print("=" * 60)
+        model = SimpleNN()
+        optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
+        model = train_model(
+            model,
+            train_loader,
+            val_loader,
+            criterion,
+            optimizer,
+            initial_epochs,
+            step_name="Float",
         )
-
-    # Evaluate after Step 1
-    float_model_initial = clone_model(model)
+        float_model_initial = clone_model(model)
+        torch.save(model.state_dict(), float_model_path)
     test_acc = evaluate_model(float_model_initial, test_loader)
     print(f"\n✓ Step 1 Complete - Float model accuracy: {test_acc * 100:.2f}%")
 
     # ====== STEP 2: Apply structured pruning (physical model shrinking) ======
-    print("\n" + "=" * 60)
-    print("STEP 2: Applying structured pruning (physical model shrinking)")
-    print("=" * 60)
-
-    original_params = count_parameters(model)
-    print(f"Original model parameters: {original_params:,}")
-
-    # Identify which neurons to keep
-    neurons_to_keep = identify_neurons_to_keep(model, amount=prune_amount)
-
-    # Create physically smaller model
-    model = create_pruned_model(model, neurons_to_keep)
-    pruned_params = count_parameters(model)
-    reduction = 100 * (1 - pruned_params / original_params)
-    print(f"Pruned model parameters: {pruned_params:,} ({reduction:.1f}% reduction)")
-
-    size_info = get_model_size_info(model)
-    print("Layer sizes:")
-    for layer_name, info in size_info["layers"].items():
-        print(f"  {layer_name}: {info['shape']} ({info['params']:,} params)")
-
-    # Evaluate after Step 2 (immediately after pruning, before fine-tuning)
-    pruned_model_before_finetune = clone_model(model)
+    pruned_model_path = f"/tmp/pruned_model_{initial_epochs}"
+    if os.path.exists(pruned_model_path):
+        print(f"Step 2: Model already exists at {pruned_model_path}, skipping pruning.")
+        model = SimpleNN()
+        model.load_state_dict(torch.load(pruned_model_path))
+        pruned_model_before_finetune = clone_model(model)
+    else:
+        print("\n" + "=" * 60)
+        print("STEP 2: Applying structured pruning (physical model shrinking)")
+        print("=" * 60)
+        original_params = count_parameters(model)
+        print(f"Original model parameters: {original_params:,}")
+        neurons_to_keep = identify_neurons_to_keep(model, amount=prune_amount)
+        model = create_pruned_model(model, neurons_to_keep)
+        pruned_params = count_parameters(model)
+        reduction = 100 * (1 - pruned_params / original_params)
+        print(
+            f"Pruned model parameters: {pruned_params:,} ({reduction:.1f}% reduction)"
+        )
+        size_info = get_model_size_info(model)
+        print("Layer sizes:")
+        for layer_name, info in size_info["layers"].items():
+            print(f"  {layer_name}: {info['shape']} ({info['params']:,} params)")
+        pruned_model_before_finetune = clone_model(model)
+        torch.save(model.state_dict(), pruned_model_path)
     test_acc = evaluate_model(pruned_model_before_finetune, test_loader)
     print(
         f"\n✓ Step 2 Complete - Pruned model (before fine-tuning) accuracy: {test_acc * 100:.2f}%"
     )
 
     # ====== STEP 3: Fine-tune pruned model ======
-    print("\n" + "=" * 60)
-    print("STEP 3: Fine-tuning pruned model")
-    print("=" * 60)
-
-    optimizer = optim.Adam(model.parameters(), lr=0.0005)  # Lower learning rate
-
-    for epoch in range(finetune_epochs):
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
-        val_loss, val_accuracy = validate_model(model, val_loader, criterion)
+    finetuned_model_path = f"/tmp/finetuned_model_{finetune_epochs}"
+    if os.path.exists(finetuned_model_path):
         print(
-            f"Epoch {epoch+1}/{finetune_epochs}, Train Loss: {train_loss:.4f}, "
-            f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy * 100:.2f}%"
+            f"Step 3: Model already exists at {finetuned_model_path}, skipping fine-tuning."
         )
-
-    # Evaluate after Step 3
-    pruned_model_after_finetune = clone_model(model)
+        model = SimpleNN()
+        model.load_state_dict(torch.load(finetuned_model_path))
+        pruned_model_after_finetune = clone_model(model)
+    else:
+        print("\n" + "=" * 60)
+        print("STEP 3: Fine-tuning pruned model")
+        print("=" * 60)
+        optimizer = optim.Adam(model.parameters(), lr=0.0005)  # Lower learning rate
+        model = train_model(
+            model,
+            train_loader,
+            val_loader,
+            criterion,
+            optimizer,
+            finetune_epochs,
+            step_name="Fine-tune",
+        )
+        pruned_model_after_finetune = clone_model(model)
+        torch.save(model.state_dict(), finetuned_model_path)
     test_acc = evaluate_model(pruned_model_after_finetune, test_loader)
     print(
         f"\n✓ Step 3 Complete - Structured pruned model (after fine-tuning) accuracy: {test_acc * 100:.2f}%"
     )
 
     # ====== STEP 4: Apply Quantization-Aware Training (QAT) ======
-    print("\n" + "=" * 60)
-    print("STEP 4: Applying Quantization-Aware Training (QAT)")
-    print("=" * 60)
-
-    model.train()  # QAT requires model to be in training mode
-    model = prepare_qat_model(model)
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)  # Lower learning rate for QAT
-
-    for epoch in range(qat_epochs):
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer)
-        val_loss, val_accuracy = validate_model(model, val_loader, criterion)
-        print(
-            f"Epoch {epoch+1}/{qat_epochs}, Train Loss: {train_loss:.4f}, "
-            f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy * 100:.2f}%"
+    qat_model_path = f"/tmp/qat_model_{qat_epochs}"
+    if os.path.exists(qat_model_path):
+        print(f"Step 4: Model already exists at {qat_model_path}, skipping QAT.")
+        model = SimpleNN()
+        model.load_state_dict(torch.load(qat_model_path))
+    else:
+        print("\n" + "=" * 60)
+        print("STEP 4: Applying Quantization-Aware Training (QAT)")
+        print("=" * 60)
+        model.train()  # QAT requires model to be in training mode
+        model = prepare_qat_model(model)
+        optimizer = optim.Adam(
+            model.parameters(), lr=0.0001
+        )  # Lower learning rate for QAT
+        model = train_model(
+            model,
+            train_loader,
+            val_loader,
+            criterion,
+            optimizer,
+            qat_epochs,
+            step_name="QAT",
+            observer_freeze_epoch=int(qat_epochs * 0.3),
         )
-
-        # Freeze observers at 30% through training for stability
-        if epoch == int(qat_epochs * 0.3):
-            model.apply(torch.quantization.disable_observer)
-            print("Observers frozen for stable quantization parameters.")
-
-    # Evaluate before quantization conversion
+        torch.save(model.state_dict(), qat_model_path)
     qat_model_before_convert_acc = evaluate_model(model, test_loader)
     print(
         f"\n✓ Step 4 Complete - QAT model (before conversion) accuracy: {qat_model_before_convert_acc * 100:.2f}%"
     )
 
     # ====== STEP 5: Convert to quantized (INT8) model and persist ======
-    print("\n" + "=" * 60)
-    print("STEP 5: Converting to quantized (INT8) model")
-    print("=" * 60)
-
-    torch.quantization.convert(model.eval(), inplace=True)
-    print("Model converted to INT8.")
-
-    # Evaluate after Step 5
+    quantized_model_path = f"/tmp/quantized_model_{qat_epochs}"
+    if os.path.exists(quantized_model_path):
+        print(
+            f"Step 5: Model already exists at {quantized_model_path}, skipping quantization."
+        )
+        model = SimpleNN()
+        model.load_state_dict(torch.load(quantized_model_path))
+    else:
+        print("\n" + "=" * 60)
+        print("STEP 5: Converting to quantized (INT8) model")
+        print("=" * 60)
+        torch.quantization.convert(model.eval(), inplace=True)
+        print("Model converted to INT8.")
+        torch.save(model.state_dict(), quantized_model_path)
     test_acc = evaluate_model(model, test_loader)
     print(
         f"\n✓ Step 5 Complete - Quantized (INT8) model accuracy: {test_acc * 100:.2f}%"
