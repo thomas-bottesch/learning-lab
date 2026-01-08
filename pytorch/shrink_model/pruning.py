@@ -21,10 +21,10 @@ from typing import Tuple
 torch.backends.quantized.engine = "fbgemm"
 
 
-# Model Creation
 class SimpleNN(nn.Module):
     def __init__(self, fc1_out=256, fc2_out=128, fc3_out=64):
         super(SimpleNN, self).__init__()
+        # Expects input already normalized to [-1, 1] range as float32
         self.quant = torch.quantization.QuantStub()
         self.flatten = nn.Flatten()
         self.fc1 = nn.Linear(28 * 28, fc1_out)
@@ -37,8 +37,7 @@ class SimpleNN(nn.Module):
         self.dequant = torch.quantization.DeQuantStub()
 
     def forward(self, x):
-        # Expects preprocessed float32 input normalized to [-1, 1]
-        # QuantStub/DeQuantStub are used for QAT and quantization conversion
+        # x: float32 tensor, shape [B, 1, 28, 28], already normalized to [-1, 1]
         x = self.quant(x)
         x = self.flatten(x)
         x = self.fc1(x)
@@ -161,17 +160,34 @@ def get_model_size_info(model: nn.Module) -> dict:
 
 
 def clone_model(model: nn.Module) -> nn.Module:
-    """Clone a model, preserving its current architecture (including pruned sizes)."""
+    """Clone a model, preserving its current architecture (including pruned sizes).
+
+    Note: This works for regular models and models with fused modules.
+    For QAT models with observers, cloning may not preserve the full training state.
+    """
     # Detect layer sizes from the original model
-    fc1_out = model.fc1.out_features
-    fc2_out = model.fc2.out_features
-    fc3_out = model.fc3.out_features
+    # Handle both regular Linear and fused modules (e.g., LinearReLU after fusion)
+    try:
+        fc1_out = model.fc1.out_features
+    except AttributeError:
+        # If fc1 is fused or wrapped, try to access the underlying layer
+        fc1_out = model.fc1[0].out_features
+
+    try:
+        fc2_out = model.fc2.out_features
+    except AttributeError:
+        fc2_out = model.fc2[0].out_features
+
+    try:
+        fc3_out = model.fc3.out_features
+    except AttributeError:
+        fc3_out = model.fc3[0].out_features
 
     # Create new model with same architecture
     cloned = SimpleNN(fc1_out=fc1_out, fc2_out=fc2_out, fc3_out=fc3_out)
 
-    # Load the state dict
-    cloned.load_state_dict(model.state_dict())
+    # Load the state dict (use strict=False for QAT models to handle observer/quant differences)
+    cloned.load_state_dict(model.state_dict(), strict=False)
     cloned.eval()
     return cloned
 
@@ -179,9 +195,34 @@ def clone_model(model: nn.Module) -> nn.Module:
 def prepare_qat_model(float_model: nn.Module) -> nn.Module:
     """Prepare model for Quantization-Aware Training (QAT)."""
 
-    # TODO: to optimize MCU performance we could fuse the Linear-RELU layers here
+    # Fuse Linear and ReLU layers for better QAT/quantization performance
+    torch.quantization.fuse_modules(
+        float_model,
+        [["fc1", "relu1"], ["fc2", "relu2"], ["fc3", "relu3"]],
+        inplace=True,
+    )
 
-    float_model.qconfig = torch.quantization.get_default_qat_qconfig("fbgemm")
+    # Create QConfig with explicit quant_min/quant_max to avoid reduce_range deprecation warning
+    qconfig = torch.quantization.QConfig(
+        activation=torch.quantization.FakeQuantize.with_args(
+            observer=torch.quantization.MovingAverageMinMaxObserver,
+            quant_min=0,
+            quant_max=255,
+            dtype=torch.quint8,
+            qscheme=torch.per_tensor_affine,
+            reduce_range=False,
+        ),
+        weight=torch.quantization.FakeQuantize.with_args(
+            observer=torch.quantization.MovingAveragePerChannelMinMaxObserver,
+            quant_min=-128,
+            quant_max=127,
+            dtype=torch.qint8,
+            qscheme=torch.per_channel_symmetric,
+            reduce_range=False,
+        ),
+    )
+
+    float_model.qconfig = qconfig
     torch.quantization.prepare_qat(float_model, inplace=True)
     print("Model prepared for QAT.")
     return float_model
@@ -250,14 +291,18 @@ def main() -> None:
     prune_amount = 0.5  # Fraction of output neurons to prune in each Linear layer
 
     # Prepare data
-    # Preprocessing pipeline: PIL image -> Tensor -> Float -> Normalize to [-1, 1]
+    # Preprocessing pipeline: PIL image -> Tensor -> Float32 -> Normalize to [-1, 1]
+    # This preprocessing will need to be replicated in C code on the MCU
+    # TODO: we must avoid vonverting from int8 -> float -> int8 in the MCU
+    # Work is needed to avoid this!
     transform = transforms.Compose(
         [
             transforms.PILToTensor(),
             transforms.ConvertImageDtype(torch.float32),
-            transforms.Normalize((0.5,), (0.5,)),  # Normalize to [-1, 1]
+            transforms.Normalize((0.5,), (0.5,)),  # (x/255 - 0.5) / 0.5 = [-1, 1]
         ]
     )
+
     train_dataset = torchvision.datasets.MNIST(
         root="./data", train=True, download=True, transform=transform
     )
@@ -326,7 +371,7 @@ def main() -> None:
     )
 
     # ====== STEP 3: Fine-tune pruned model ======
-    print("\n" + "=" * 60)Pl
+    print("\n" + "=" * 60)
     print("STEP 3: Fine-tuning pruned model")
     print("=" * 60)
 
