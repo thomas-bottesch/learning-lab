@@ -127,6 +127,57 @@ def train_model(
     return model
 
 
+def train_with_distillation(
+    student: nn.Module,
+    teacher: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    optimizer: optim.Optimizer,
+    num_epochs: int,
+    temperature: float,
+    alpha: float,
+    step_name: str = "",
+    verbose: bool = True,
+    observer_freeze_epoch: int = None,
+) -> nn.Module:
+    """Train student model using distillation from teacher. Optionally freeze quantization observers at a given epoch."""
+    student.to(device)
+    teacher.to(device)
+    teacher.eval()
+
+    for epoch in range(num_epochs):
+        student.train()
+        running_loss = 0.0
+        for inputs, labels in train_loader:
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            optimizer.zero_grad()
+            with torch.no_grad():
+                teacher_logits = teacher(inputs)
+            student_logits = student(inputs)
+            loss = distillation_loss(
+                student_logits, teacher_logits, labels, temperature, alpha
+            )
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+
+        # Optionally freeze observers at the specified epoch
+        if observer_freeze_epoch is not None and epoch == observer_freeze_epoch:
+            student.apply(torch.quantization.disable_observer)
+            print("Observers frozen for stable quantization parameters.")
+
+        val_loss, val_accuracy = validate_model(
+            student, val_loader, nn.CrossEntropyLoss()
+        )
+        if verbose:
+            print(
+                f"{step_name} Epoch {epoch+1}/{num_epochs}, Train Loss: {running_loss/len(train_loader):.4f}, "
+                f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy * 100:.2f}%"
+            )
+    return student
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -387,7 +438,11 @@ def distillation_loss(student_logits, teacher_logits, labels, T, alpha):
 
 
 def main() -> None:
-    initial_epochs = 15
+    initial_epochs = 15  # Step 1: Float model training
+    distill_epochs = 60  # Step 2: Distillation
+    prune_amount = 0.5  # Step 3: Fraction to prune
+    finetune_epochs = 40  # Step 4: Fine-tuning after pruning
+    qat_epochs = 40  # Step 5: Quantization-Aware Training
 
     # Data augmentation for training
     train_transform = transforms.Compose(
@@ -441,7 +496,7 @@ def main() -> None:
     criterion = nn.CrossEntropyLoss()
 
     # ====== STEP 1: Train initial float model ======
-    float_model_path = f"/tmp/lenet5_model_{initial_epochs}"
+    float_model_path = f"/tmp/distill_1_float_model_{initial_epochs}"
     if os.path.exists(float_model_path):
         print(f"Step 1: Model already exists at {float_model_path}, skipping training.")
         model = SimpleNN()
@@ -468,7 +523,7 @@ def main() -> None:
     print(f"\n✓ Step 1 Complete - Float model accuracy: {test_acc * 100:.2f}%")
 
     # ====== STEP 2: Distill knowledge into StudentNet ======
-    student_model_path = "/tmp/studentnet_distilled.pth"
+    student_model_path = f"/tmp/distill_2_studentnet_distilled_{distill_epochs}.pth"
     if os.path.exists(student_model_path):
         print(
             f"Step 2: Model already exists at {student_model_path}, skipping distillation."
@@ -480,8 +535,6 @@ def main() -> None:
         print("STEP 2: Knowledge Distillation into StudentNet")
         print("=" * 60)
 
-        # Distillation hyperparameters
-        distill_epochs = 60
         temperature = 4.0
         alpha = 0.7  # weight for distillation loss vs. hard label loss
 
@@ -519,10 +572,12 @@ def main() -> None:
     print(f"\n✓ Step 2 Complete - StudentNet distilled accuracy: {test_acc * 100:.2f}%")
 
     # ====== STEP 3: Apply structured pruning to StudentNet ======
-    prune_amount = 0.5  # Fraction to prune
-    finetune_epochs = 10
-    pruned_student_path = f"/tmp/studentnet_pruned_{prune_amount}.pth"
-    pruned_student_arch_path = f"/tmp/studentnet_pruned_{prune_amount}_arch.pt"
+    pruned_student_path = (
+        f"/tmp/distill_3_studentnet_pruned_{prune_amount}_{distill_epochs}.pth"
+    )
+    pruned_student_arch_path = (
+        f"/tmp/distill_3_studentnet_pruned_{prune_amount}_{distill_epochs}_arch.pt"
+    )
 
     if os.path.exists(pruned_student_path) and os.path.exists(pruned_student_arch_path):
         print(
@@ -571,8 +626,8 @@ def main() -> None:
     )
 
     # ====== STEP 4: Fine-tune pruned StudentNet ======
-    finetuned_student_path = f"/tmp/studentnet_finetuned_{finetune_epochs}.pth"
-    finetuned_student_arch_path = f"/tmp/studentnet_finetuned_{finetune_epochs}_arch.pt"
+    finetuned_student_path = f"/tmp/distill_4_studentnet_finetuned_{finetune_epochs}_{prune_amount}_{distill_epochs}.pth"
+    finetuned_student_arch_path = f"/tmp/distill_4_studentnet_finetuned_{finetune_epochs}_{prune_amount}_{distill_epochs}_arch.pt"
 
     if os.path.exists(finetuned_student_path) and os.path.exists(
         finetuned_student_arch_path
@@ -591,18 +646,29 @@ def main() -> None:
         pruned_student_after_finetune = clone_model_studentnet(student)
     else:
         print("\n" + "=" * 60)
-        print("STEP 4: Fine-tuning pruned StudentNet")
+        print("STEP 4: Fine-tuning pruned StudentNet with teacher distillation")
         print("=" * 60)
         optimizer = optim.Adam(student.parameters(), lr=0.0005)
         student.to(device)
-        student = train_model(
+
+        # Load teacher model for distillation during fine-tuning
+        teacher = SimpleNN().to(device)
+        teacher.load_state_dict(torch.load(float_model_path, map_location=device))
+        teacher.eval()
+
+        # Fine-tune using distillation from teacher
+        temperature = 4.0
+        alpha = 0.7  # Same distillation parameters as initial training
+        student = train_with_distillation(
             student,
+            teacher,
             student_train_loader,
             student_val_loader,
-            nn.CrossEntropyLoss(),
             optimizer,
             finetune_epochs,
-            step_name="Fine-tune",
+            temperature,
+            alpha,
+            step_name="Fine-tune (distillation)",
         )
         pruned_student_after_finetune = clone_model_studentnet(student)
         torch.save(student.state_dict(), finetuned_student_path)
@@ -620,8 +686,8 @@ def main() -> None:
 
     # ====== STEP 5: Apply Quantization-Aware Training (QAT) ======
     qat_epochs = 10
-    qat_student_path = f"/tmp/studentnet_qat_{qat_epochs}.pth"
-    qat_student_arch_path = f"/tmp/studentnet_qat_{qat_epochs}_arch.pt"
+    qat_student_path = f"/tmp/distill_5_studentnet_qat_{qat_epochs}_{finetune_epochs}_{prune_amount}_{distill_epochs}.pth"
+    qat_student_arch_path = f"/tmp/distill_5_studentnet_qat_{qat_epochs}_{finetune_epochs}_{prune_amount}_{distill_epochs}_arch.pt"
 
     if os.path.exists(qat_student_path) and os.path.exists(qat_student_arch_path):
         print(f"Step 5: Model already exists at {qat_student_path}, skipping QAT.")
@@ -637,22 +703,34 @@ def main() -> None:
         student.to(device)
     else:
         print("\n" + "=" * 60)
-        print("STEP 5: Applying Quantization-Aware Training (QAT)")
+        print("STEP 5: Applying Quantization-Aware Training (QAT) with distillation")
         print("=" * 60)
         student.train()
         student.to(device)
         student = prepare_qat_studentnet(student)
         optimizer = optim.Adam(student.parameters(), lr=0.0001)
-        student = train_model(
+
+        # Load teacher model for distillation during QAT
+        teacher = SimpleNN().to(device)
+        teacher.load_state_dict(torch.load(float_model_path, map_location=device))
+        teacher.eval()
+
+        temperature = 4.0
+        alpha = 0.7  # Same distillation parameters as before
+        student = train_with_distillation(
             student,
+            teacher,
             student_train_loader,
             student_val_loader,
-            nn.CrossEntropyLoss(),
             optimizer,
             qat_epochs,
-            step_name="QAT",
+            temperature,
+            alpha,
+            step_name="QAT (distillation)",
+            verbose=True,
             observer_freeze_epoch=int(qat_epochs * 0.3),
         )
+
         torch.save(student.state_dict(), qat_student_path)
         arch = {
             "conv1_out": (
@@ -679,9 +757,9 @@ def main() -> None:
     )
 
     # ====== STEP 6: Convert to quantized (INT8) model and persist ======
-    quantized_student_path = f"/tmp/studentnet_quantized_{qat_epochs}.pth"
-    quantized_student_arch_path = f"/tmp/studentnet_quantized_{qat_epochs}_arch.pt"
-    quantized_student_fullmodel_path = f"/tmp/studentnet_quantized_{qat_epochs}_full.pt"
+    quantized_student_path = f"/tmp/distill_6_studentnet_quantized_{qat_epochs}_{finetune_epochs}_{prune_amount}_{distill_epochs}.pth"
+    quantized_student_arch_path = f"/tmp/distill_6_studentnet_quantized_{qat_epochs}_{finetune_epochs}_{prune_amount}_{distill_epochs}_arch.pt"
+    quantized_student_fullmodel_path = f"/tmp/distill_6_studentnet_quantized_{qat_epochs}_{finetune_epochs}_{prune_amount}_{distill_epochs}_full.pt"
 
     if (
         os.path.exists(quantized_student_path)
