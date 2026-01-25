@@ -19,8 +19,8 @@
 	"extensions": [
 		"ms-python.python",
 		"ms-toolsai.jupyter",
+		"ms-python.black-formatter",
 		"eamodio.gitlens",
-		"ms-python.black-formatter"
 	],
 	"runArgs": [
 		"--net",

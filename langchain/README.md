@@ -1,6 +1,6 @@
 ## Getting Started
 
-Once inside the container, follow these steps to set up Ollama:
+Once inside the container, follow these steps to set up Ollama: 
 
 1. **Start the Ollama server in the background:**
     ```bash
