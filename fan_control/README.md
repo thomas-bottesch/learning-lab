@@ -1,0 +1,43 @@
+# Fan Control Service Setup and Files
+
+This directory contains files to set up a custom systemd service for controlling CPU and GPU fans on systems with an NCT6775/NCT6799 Super I/O chip.
+
+## File Descriptions
+
+- **my_fan_control_service.py**: Python script that runs as a service, reads CPU and GPU temperatures, and sets fan speeds accordingly via the hardware monitoring (hwmon) sysfs interface. It supports both CPU and GPU temperature monitoring (GPU is optional, requires `pynvml`). The script ensures safe operation, restores automatic fan control on exit, and logs status for diagnostics.
+
+- **fan-control.service**: A systemd service unit file that runs the Python script as a background service. It ensures the service starts after kernel modules are loaded, restarts automatically on failure, and applies security hardening options. It grants the necessary permissions to write to `/sys/class/hwmon` for fan control.
+
+- **setup_fancontrol.py**: Idempotent setup script to install the Python script and systemd service file to the correct system locations, reload the systemd daemon, and enable/start the service. Must be run as root (with sudo).
+
+## Required Kernel Module
+
+The `nct6775` kernel module must be loaded for fan control to work. To ensure it loads at boot, create the following file:
+
+    /etc/modules-load.d/nct6775.conf
+
+with the contents:
+
+    nct6775
+
+This ensures the module is available before the service starts.
+
+## Setup Steps
+
+1. Ensure the `nct6775` module is loaded at boot as described above.
+2. Run `setup_fancontrol.py` as root to install and enable the service:
+
+	sudo ./setup_fancontrol.py
+
+3. Check the service status:
+
+	systemctl status fan-control.service
+
+4. View logs for troubleshooting:
+
+	journalctl -u fan-control.service -f
+
+## Notes
+
+- The service will fail to start if the hardware monitor device is not found or if the required sysfs paths are missing.
+- The Python script is designed to be robust and will restore automatic fan control on shutdown or error.
