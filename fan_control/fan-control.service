@@ -1,0 +1,30 @@
+[Unit]
+Description=Custom Fan Control Service (CPU + GPU)
+# Wait for module loading to complete (nct6775 module must be loaded first)
+After=systemd-modules-load.service
+# Fail if modules aren't loaded (nct6775 module is required for nct6799 device)
+Requires=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/sbin/my_fan_control_service.py
+# Always restart - fan control is critical, restart even on clean exit
+Restart=always
+RestartSec=10
+# Allow 30 seconds for graceful shutdown (restores automatic fan control)
+TimeoutStopSec=30
+
+# Security hardening (limited due to /sys access requirements)
+# Prevent privilege escalation
+NoNewPrivileges=yes
+# Isolate /tmp from other processes
+PrivateTmp=yes
+# Prevent access to /home directories
+ProtectHome=yes
+# Make most of filesystem read-only
+ProtectSystem=strict
+# Allow writes only to hwmon sysfs (needed for pwm control)
+ReadWritePaths=/sys/class/hwmon
+
+[Install]
+WantedBy=multi-user.target
