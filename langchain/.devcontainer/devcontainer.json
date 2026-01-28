@@ -4,24 +4,28 @@
 		"dockerfile": "Dockerfile",
 		"context": ".."
 	},
-	"settings": {
-		"terminal.integrated.shell.linux": "/bin/bash",
-		"terminal.integrated.shellArgs.linux": [
-			"-l"
-		],
-		"python.defaultInterpreterPath": "/opt/venv/bin/python",
-		"python.terminal.activateEnvironment": true,
-		"editor.formatOnSave": true,
-		"[python]": {
-			"editor.defaultFormatter": "ms-python.black-formatter"
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"terminal.integrated.shell.linux": "/bin/bash",
+				"terminal.integrated.shellArgs.linux": [
+					"-l"
+				],
+				"python.defaultInterpreterPath": "/opt/venv/bin/python",
+				"python.terminal.activateEnvironment": true,
+				"editor.formatOnSave": true,
+				"[python]": {
+					"editor.defaultFormatter": "ms-python.black-formatter"
+				}
+			},
+			"extensions": [
+				"ms-python.python",
+				"ms-toolsai.jupyter",
+				"ms-python.black-formatter",
+				"eamodio.gitlens"
+			]
 		}
 	},
-	"extensions": [
-		"ms-python.python",
-		"ms-toolsai.jupyter",
-		"ms-python.black-formatter",
-		"eamodio.gitlens",
-	],
 	"runArgs": [
 		"--net",
 		"host",
