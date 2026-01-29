@@ -1,0 +1,22 @@
+langchain
+langchain-community
+langchain-openai
+
+# For connecting to llama.cpp server (OpenAI-compatible API)
+openai
+
+# For loading PDFs & text files
+pypdf
+
+# For web scraping
+beautifulsoup4
+lxml
+
+# For vector search (local)
+faiss-cpu
+
+# Useful utilities
+python-dotenv
+
+# To download models from Hugging Face
+huggingface_hub[cli]
