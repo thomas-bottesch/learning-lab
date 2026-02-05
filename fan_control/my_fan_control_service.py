@@ -24,11 +24,15 @@ try:
 except ImportError:
     PYNVML_AVAILABLE = False
 
-MAX_FAN_SPEED = 180
-MIN_FAN_SPEED = 30
 HYSTERESIS_PERCENT = 5.0  # Fan speed must change by this % to trigger update
 TEMP_SMOOTHING = 0.5  # EMA smoothing factor (0-1): lower = more smoothing
-PWM_CHANNELS = [4, 5]  # List of PWM channels to control (e.g., [4, 5] or [1, 2, 3])
+
+# PWM channel configuration: {channel_num: {'min': min_speed, 'max': max_speed}}
+PWM_CONFIG = {
+    1: {"min": 50, "max": 180},
+    4: {"min": 30, "max": 180},
+    5: {"min": 30, "max": 180},
+}
 
 # Global GPU handle to avoid repeated init/shutdown
 gpu_handle = None
@@ -111,7 +115,7 @@ def determine_fan_speed_percent(
         CPU_MIN = 50 * 1000
         CPU_MAX = 70 * 1000
         GPU_MIN = 55 * 1000
-        GPU_MAX = 80 * 1000
+        GPU_MAX = 70 * 1000
         gpu_temp = get_gpu_temp(last_gpu_ema)
         cpu_temp = get_cpu_temp(cpu_temp_path, last_cpu_ema)
 
@@ -185,7 +189,7 @@ def cleanup_and_exit(
         logging.info("Shutting down gracefully...")
 
     # Restore automatic fan control
-    for pwm_num in PWM_CHANNELS:
+    for pwm_num in PWM_CONFIG.keys():
         pwm_enable = main_path / f"pwm{pwm_num}_enable"
         try:
             logging.info(f"Restoring automatic fan control for pwm{pwm_num}")
@@ -212,7 +216,7 @@ def cleanup_and_exit(
 def enable_manual_input(main_path: Path, initial_run=False) -> bool:
     """Enable manual fan control. Returns True on success, False on failure."""
     # Enable manual fan control but only if not already enabled
-    for pwm_num in PWM_CHANNELS:
+    for pwm_num in PWM_CONFIG.keys():
         pwm_enable = main_path / f"pwm{pwm_num}_enable"
         try:
             with open(pwm_enable, "r") as f:
@@ -228,7 +232,7 @@ def enable_manual_input(main_path: Path, initial_run=False) -> bool:
             return False
 
     # Check if enabled if not return failure
-    for pwm_num in PWM_CHANNELS:
+    for pwm_num in PWM_CONFIG.keys():
         pwm_enable = main_path / f"pwm{pwm_num}_enable"
         try:
             with open(pwm_enable, "r") as f:
@@ -244,11 +248,11 @@ def enable_manual_input(main_path: Path, initial_run=False) -> bool:
 
     if initial_run:
         logging.info(
-            f"Manual fan control enabled successfully for PWM channels: {PWM_CHANNELS}"
+            f"Manual fan control enabled successfully for PWM channels: {list(PWM_CONFIG.keys())}"
         )
     else:
         logging.info(
-            f"Manual fan control re-enabled successfully for PWM channels: {PWM_CHANNELS}"
+            f"Manual fan control re-enabled successfully for PWM channels: {list(PWM_CONFIG.keys())}"
         )
 
     return True
@@ -262,9 +266,9 @@ def main() -> None:
 
     logging.info("Fan control service starting...")
 
-    # Validate PWM_CHANNELS is not empty
-    if not PWM_CHANNELS:
-        logging.critical("PWM_CHANNELS is empty. No fans to control.")
+    # Validate PWM_CONFIG is not empty
+    if not PWM_CONFIG:
+        logging.critical("PWM_CONFIG is empty. No fans to control.")
         sys.exit(1)
 
     # Initialize GPU once at startup
@@ -320,14 +324,17 @@ def main() -> None:
         percent, gpu_ema, cpu_ema = determine_fan_speed_percent(
             str(cpu_temp_path), last_percent, last_gpu_ema, last_cpu_ema
         )
-        fan_speed = int(MIN_FAN_SPEED + (MAX_FAN_SPEED - MIN_FAN_SPEED) * percent)
         last_percent = percent
         last_gpu_ema = gpu_ema
         last_cpu_ema = cpu_ema
 
         # First attempt: try to write to all PWM channels
         failed_pwms = []
-        for pwm_num in PWM_CHANNELS:
+        for pwm_num in PWM_CONFIG.keys():
+            pwm_config = PWM_CONFIG[pwm_num]
+            fan_speed = int(
+                pwm_config["min"] + (pwm_config["max"] - pwm_config["min"]) * percent
+            )
             pwm = main_path / f"pwm{pwm_num}"
             try:
                 with open(pwm, "w") as f:
@@ -349,6 +356,11 @@ def main() -> None:
             # Retry writing to the failed PWM channels
             still_failed = []
             for pwm_num in failed_pwms:
+                pwm_config = PWM_CONFIG[pwm_num]
+                fan_speed = int(
+                    pwm_config["min"]
+                    + (pwm_config["max"] - pwm_config["min"]) * percent
+                )
                 pwm = main_path / f"pwm{pwm_num}"
                 try:
                     with open(pwm, "w") as f:
@@ -370,9 +382,9 @@ def main() -> None:
 
         # Log status every 12 iterations (every minute)
         if iteration % 12 == 0:
-            logging.info(f"Fan speed set to {fan_speed} ({percent*100:.1f}%)")
+            logging.info(f"Fan speeds set to {percent*100:.1f}%")
         else:
-            logging.debug(f"Fan speed set to {fan_speed} ({percent*100:.1f}%)")
+            logging.debug(f"Fan speeds set to {percent*100:.1f}%")
 
         iteration += 1
         time.sleep(5)  # Update every 5 seconds
