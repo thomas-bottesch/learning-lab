@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-create-bucket
+  namespace: minio
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          envFrom:
+            - secretRef:
+                name: minio-root
+          command:
+            - /bin/sh
+            - -c
+            - |
+                set -e
+                i=0
+                until mc alias set local http://minio.minio.svc.cluster.local:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do
+                i=$((i+1))
+                if [ "$i" -ge 30 ]; then
+                  echo "MinIO not ready" >&2
+                  exit 1
+                fi
+                sleep 2
+                done
+                mc mb -p local/dvc-data || true
+                mc version enable local/dvc-data || true
+                mc mb -p local/lakefs-data || true
+                mc version enable local/lakefs-data || true

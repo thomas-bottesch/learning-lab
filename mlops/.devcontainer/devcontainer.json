@@ -1,0 +1,67 @@
+{
+	"name": "mlops",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".."
+	},
+	"forwardPorts": [],
+	"portsAttributes": {
+		"*": {
+			"onAutoForward": "ignore"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"terminal.integrated.shell.linux": "/bin/bash",
+				"terminal.integrated.shellArgs.linux": [
+					"-l"
+				],
+				"python.defaultInterpreterPath": "/opt/venv/bin/python",
+				"python.terminal.activateEnvironment": true,
+				"editor.formatOnSave": true,
+				"[python]": {
+					"editor.defaultFormatter": "ms-python.black-formatter"
+				},
+				"remote.autoForwardPorts": false,
+				"remote.restoreForwardedPorts": false,
+				"remote.ports.showNotifications": false,
+				"remote.autoForwardPortsSource": "output"
+			},
+			"extensions": [
+				"ms-python.python",
+				"ms-toolsai.jupyter",
+				"ms-python.black-formatter",
+				"eamodio.gitlens"
+			],
+		}
+	},
+	"runArgs": [
+		"--net",
+		"host",
+		"--gpus=all",
+		"--device=/dev/dri:/dev/dri",
+		"--env-file",
+		".env"
+	],
+	"containerEnv": {
+		"DISPLAY": ":1",
+		"NVIDIA_VISIBLE_DEVICES": "all",
+		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics",
+		"KUBECONFIG": "/etc/rancher/k3s/k3s.yaml"
+	},
+	"mounts": [
+		"source=/usr/lib/x86_64-linux-gnu/nvidia,target=/usr/lib/x86_64-linux-gnu/nvidia,type=bind,consistency=cached",
+		"source=/usr/lib/nvidia,target=/usr/lib/nvidia,type=bind,consistency=cached",
+		"source=/dev/nvidia0,target=/dev/nvidia0,type=bind",
+		"source=/dev/nvidiactl,target=/dev/nvidiactl,type=bind",
+		"source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+		"source=${localWorkspaceFolder}/.devcontainer/bash_history/.bash_history,target=/home/vscode/.bash_history,type=bind,consistency=cached",
+		"source=${localWorkspaceFolder}/container_config/k9s/config.yaml,target=/home/vscode/.config/k9s/config.yaml,type=bind,consistency=cached",
+		"source=${localWorkspaceFolder}/container_config/k9s/active.yaml,target=/home/vscode/.local/share/k9s/clusters/default/default/config.yaml,type=bind,consistency=cached",
+		"source=/etc/rancher,target=/etc/rancher,type=bind,consistency=cached"
+	],
+	"workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspace/git_repo,type=bind",
+	"workspaceFolder": "/workspace/git_repo/${localWorkspaceFolderBasename}",
+	"remoteUser": "vscode",
+}

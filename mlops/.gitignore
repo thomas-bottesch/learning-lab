@@ -1,0 +1,5 @@
+/cache/*
+/ollama_models/*
+!/ollama_models/README.md
+# add bash_history to .gitignore
+bash_history

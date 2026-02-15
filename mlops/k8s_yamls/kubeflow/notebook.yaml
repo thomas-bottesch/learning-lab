@@ -1,0 +1,20 @@
+apiVersion: kubeflow.org/v1
+kind: Notebook
+metadata:
+  name: ds-notebook
+  namespace: user-example-com
+spec:
+  template:
+    spec:
+      serviceAccountName: default-editor
+      containers:
+        - name: ds-notebook
+          image: ghcr.io/kubeflow/kubeflow/notebook-servers/jupyter-scipy:v1.9.0
+          volumeMounts: []
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi

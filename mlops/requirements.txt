@@ -1,0 +1,4 @@
+# To download models from Hugging Face
+huggingface_hub[cli]
+kfp
+kfp-kubernetes

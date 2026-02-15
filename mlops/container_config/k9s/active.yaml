@@ -1,0 +1,13 @@
+k9s:
+  cluster: default
+  namespace:
+    active: all
+    lockFavorites: false
+    favorites:
+      - all
+      - default
+  view:
+    active: v1/pods all
+  featureGates:
+    nodeShell: false
+  proxy: null

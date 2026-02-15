@@ -30,6 +30,7 @@ TEMP_SMOOTHING = 0.5  # EMA smoothing factor (0-1): lower = more smoothing
 # PWM channel configuration: {channel_num: {'min': min_speed, 'max': max_speed}}
 PWM_CONFIG = {
     1: {"min": 50, "max": 180},
+    2: {"min": 30, "max": 180},
     4: {"min": 30, "max": 180},
     5: {"min": 30, "max": 180},
 }

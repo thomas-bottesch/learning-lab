@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea
+  namespace: gitea
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea
+  template:
+    metadata:
+      labels:
+        app: gitea
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: gitea
+          image: docker.gitea.com/gitea:1.25.4-rootless
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: 3000
+              name: http
+            - containerPort: 22
+              name: ssh
+          env:
+            - name: USER_UID
+              value: "1000"
+            - name: USER_GID
+              value: "1000"
+            - name: GITEA__database__DB_TYPE
+              value: "sqlite3"
+            - name: GITEA__database__PATH
+              value: "/data/gitea/gitea.db"
+            - name: GITEA__server__DOMAIN
+              value: "localhost"
+            - name: GITEA__server__ROOT_URL
+              value: "http://172.17.0.1:3000/"
+            - name: GITEA__server__SSH_DOMAIN
+              value: "localhost"
+            - name: GITEA__server__SSH_PORT
+              value: "22"
+            - name: GITEA__server__HTTP_PORT
+              value: "3000"
+            - name: GITEA__security__INSTALL_LOCK
+              value: "true"
+            - name: GITEA__security__SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-credentials
+                  key: secret-key
+            - name: GITEA__security__INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-credentials
+                  key: internal-token
+            - name: GITEA__admin__USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-credentials
+                  key: admin-username
+            - name: GITEA__admin__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-credentials
+                  key: admin-password
+            - name: GITEA__admin__EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-credentials
+                  key: admin-email
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: 3000
+            initialDelaySeconds: 200
+            timeoutSeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 5
+            timeoutSeconds: 3
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: gitea-data-pvc

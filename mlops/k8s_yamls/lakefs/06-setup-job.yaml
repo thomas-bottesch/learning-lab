@@ -1,0 +1,109 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lakefs-setup
+  namespace: lakefs
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: setup
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              
+              LAKEFS_URL="http://lakefs.lakefs.svc.cluster.local:8000"
+              echo "Waiting for lakeFS at $LAKEFS_URL..."
+              
+              READY=false
+              for i in $(seq 1 90); do
+                HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$LAKEFS_URL/api/v1/healthcheck" 2>&1 || true)
+                if [ "$HTTP_CODE" = "204" ]; then
+                  echo "lakeFS healthcheck passed (attempt $i)"
+                  READY=true
+                  break
+                fi
+                if [ $((i % 10)) -eq 0 ]; then
+                  echo "Waiting... attempt $i/90"
+                fi
+                sleep 2
+              done
+              
+              if [ "$READY" != "true" ]; then
+                echo "Timeout: lakeFS did not become ready"
+                exit 1
+              fi
+              
+              sleep 2
+              
+              echo "Checking setup status..."
+              STATUS=$(curl -s --max-time 10 "$LAKEFS_URL/api/v1/setup_lakefs" 2>/dev/null || echo "")
+              echo "Setup status: $STATUS"
+              
+              if echo "$STATUS" | grep -q '"state":"not_initialized"'; then
+                echo "Initializing lakeFS..."
+                
+                # Initialize with just username - lakeFS will generate credentials
+                INIT_RESULT=$(curl -s --max-time 10 -X POST \
+                  -H "Content-Type: application/json" \
+                  -d '{"username":"admin"}' \
+                  "$LAKEFS_URL/api/v1/setup_lakefs" 2>/dev/null || echo "")
+                
+                echo "Init result: $INIT_RESULT"
+                
+                # Extract generated credentials for display
+                GEN_ACCESS_KEY=$(echo "$INIT_RESULT" | grep -o '"access_key_id":"[^"]*"' | cut -d'"' -f4)
+                GEN_SECRET_KEY=$(echo "$INIT_RESULT" | grep -o '"secret_access_key":"[^"]*"' | cut -d'"' -f4)
+                
+                if [ -n "$GEN_ACCESS_KEY" ] && [ -n "$GEN_SECRET_KEY" ]; then
+                  echo ""
+                  echo "=========================================="
+                  echo "Generated Credentials:"
+                  echo "=========================================="
+                  echo "Access Key ID: $GEN_ACCESS_KEY"
+                  echo "Secret Access Key: $GEN_SECRET_KEY"
+                  echo "=========================================="
+                  echo ""
+                  echo "IMPORTANT: Save these credentials by running:"
+                  echo "  bash save_lakefs_db.sh"
+                  echo ""
+                fi
+                
+                # Complete setup with email
+                sleep 2
+                STATUS2=$(curl -s --max-time 10 "$LAKEFS_URL/api/v1/setup_lakefs" 2>/dev/null || echo "")
+                
+                if echo "$STATUS2" | grep -q '"comm_prefs_missing":true'; then
+                  echo "Completing setup with email..."
+                  
+                  # Login with generated credentials
+                  LOGIN_RESPONSE=$(curl -s --max-time 10 -X POST \
+                    -H "Content-Type: application/json" \
+                    -d "{\"access_key_id\":\"$GEN_ACCESS_KEY\",\"secret_access_key\":\"$GEN_SECRET_KEY\"}" \
+                    "$LAKEFS_URL/api/v1/auth/login" 2>/dev/null || echo "")
+                  
+                  TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+                  
+                  if [ -n "$TOKEN" ]; then
+                    curl -s --max-time 10 -X POST \
+                      -H "Content-Type: application/json" \
+                      -H "Authorization: Bearer $TOKEN" \
+                      -d '{"username":"admin","email":"admin@example.com","feature_updates":false,"security_updates":false}' \
+                      "$LAKEFS_URL/api/v1/setup_lakefs" 2>/dev/null || echo ""
+                    echo "Setup complete!"
+                  fi
+                fi
+                
+              elif echo "$STATUS" | grep -q '"state":"initialized"'; then
+                echo "lakeFS already initialized"
+              else
+                echo "Setup status: $STATUS"
+              fi
+              
+              echo ""
+              echo "Setup job finished"
