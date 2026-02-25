@@ -91,7 +91,19 @@ PODEOF
 }
 
 apply_drone_yamls() {
+    # Execute configmap and secret creation scripts
+    echo "Creating Drone ConfigMap..."
+    "$SCRIPT_DIR/create_drone_configmap.sh"
+    
+    echo "Creating Drone Secret..."
+    "$SCRIPT_DIR/create_drone_additional_secret.sh"
+    
+    # Apply remaining Drone YAMLs (excluding namespace and PVC which may already be applied)
     for yaml in "$YAML_DIR"/*.yaml; do
+        # Skip namespace and PVC files (already applied during backup restore)
+        if [[ "$(basename "$yaml")" == "01-namespace.yaml" ]] || [[ "$(basename "$yaml")" == "03-pvc.yaml" ]]; then
+            continue
+        fi
         echo "Applying $yaml..."
         kubectl apply -f "$yaml"
     done

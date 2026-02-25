@@ -8,6 +8,9 @@ LAKEFS_ENDPOINT="${LAKEFS_ENDPOINT:-http://lakefs.lakefs.svc.cluster.local:8000}
 MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://minio.minio.svc.cluster.local:9000}"
 LAKEFS_BUCKET_NAME="${LAKEFS_BUCKET_NAME:-lakefs-data}"
 DVC_BUCKET_NAME="${DVC_BUCKET_NAME:-dvc-data}"
+MODEL_BUCKET="${MODEL_BUCKET:-models}"
+DATA_BUCKET="${DATA_BUCKET:-datasets}"
+MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-http://mlflow.mlflow.svc.cluster.local:5000}"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -28,6 +31,10 @@ kubectl -n "$TARGET_NAMESPACE" create configmap "$CONFIGMAP_NAME" \
   --from-literal=MINIO_ENDPOINT="$MINIO_ENDPOINT" \
   --from-literal=LAKEFS_BUCKET_NAME="$LAKEFS_BUCKET_NAME" \
   --from-literal=DVC_BUCKET_NAME="$DVC_BUCKET_NAME" \
+  --from-literal=MODEL_BUCKET="$MODEL_BUCKET" \
+  --from-literal=DATA_BUCKET="$DATA_BUCKET" \
+  --from-literal=MLFLOW_TRACKING_URI="$MLFLOW_TRACKING_URI" \
+  --from-literal=MLFLOW_S3_ENDPOINT_URL="$MINIO_ENDPOINT" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 cat <<EOF
@@ -37,6 +44,10 @@ Data keys:
   - MINIO_ENDPOINT=$MINIO_ENDPOINT
   - LAKEFS_BUCKET_NAME=$LAKEFS_BUCKET_NAME
   - DVC_BUCKET_NAME=$DVC_BUCKET_NAME
+  - MODEL_BUCKET=$MODEL_BUCKET
+  - DATA_BUCKET=$DATA_BUCKET
+  - MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI
+  - MLFLOW_S3_ENDPOINT_URL=$MINIO_ENDPOINT
 
 Verify:
   kubectl -n $TARGET_NAMESPACE get configmap $CONFIGMAP_NAME -o yaml

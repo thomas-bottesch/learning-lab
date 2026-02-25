@@ -26,14 +26,14 @@
 				"remote.autoForwardPorts": false,
 				"remote.restoreForwardedPorts": false,
 				"remote.ports.showNotifications": false,
-				"remote.autoForwardPortsSource": "output"
+				"remote.forwardOnOpen": false
 			},
 			"extensions": [
 				"ms-python.python",
 				"ms-toolsai.jupyter",
 				"ms-python.black-formatter",
 				"eamodio.gitlens"
-			],
+			]
 		}
 	},
 	"runArgs": [
@@ -63,5 +63,5 @@
 	],
 	"workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspace/git_repo,type=bind",
 	"workspaceFolder": "/workspace/git_repo/${localWorkspaceFolderBasename}",
-	"remoteUser": "vscode",
+	"remoteUser": "vscode"
 }

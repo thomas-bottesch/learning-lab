@@ -28,6 +28,53 @@ spec:
               value: "2"
             - name: DRONE_RUNNER_NAME
               value: "drone-runner"
+            # MLOps Service Endpoints from ConfigMap
+            - name: MLFLOW_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: drone-config
+                  key: MLFLOW_ENDPOINT
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: drone-config
+                  key: MLFLOW_TRACKING_URI
+            - name: KUBEFLOW_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: drone-config
+                  key: KUBEFLOW_ENDPOINT
+            - name: LAKEFS_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: drone-config
+                  key: LAKEFS_ENDPOINT
+            - name: MINIO_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: drone-config
+                  key: MINIO_ENDPOINT
+            # MLOps Credentials from Secret
+            - name: LAKEFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: drone-additional-credentials
+                  key: LAKEFS_ACCESS_KEY
+            - name: LAKEFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: drone-additional-credentials
+                  key: LAKEFS_SECRET_KEY
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: drone-additional-credentials
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: drone-additional-credentials
+                  key: MINIO_SECRET_KEY
           securityContext:
             privileged: true
           volumeMounts:

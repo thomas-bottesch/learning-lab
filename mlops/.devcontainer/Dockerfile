@@ -42,6 +42,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     git \
+    git-lfs \
     wget \
     unzip \
     screen \

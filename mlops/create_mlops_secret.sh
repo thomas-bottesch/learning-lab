@@ -46,6 +46,8 @@ kubectl -n "$TARGET_NAMESPACE" create secret generic "$TARGET_SECRET_NAME" \
   --from-literal=LAKEFS_SECRET_KEY="$lakefs_secret_key" \
   --from-literal=MINIO_ACCESS_KEY="$minio_access_key" \
   --from-literal=MINIO_SECRET_KEY="$minio_secret_key" \
+  --from-literal=AWS_ACCESS_KEY_ID="$minio_access_key" \
+  --from-literal=AWS_SECRET_ACCESS_KEY="$minio_secret_key" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 cat <<EOF
@@ -55,6 +57,8 @@ Keys:
   - LAKEFS_SECRET_KEY
   - MINIO_ACCESS_KEY
   - MINIO_SECRET_KEY
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
 
 Verify:
   kubectl -n $TARGET_NAMESPACE get secret $TARGET_SECRET_NAME -o jsonpath='{.data}'

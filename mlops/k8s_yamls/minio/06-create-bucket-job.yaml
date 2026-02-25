@@ -31,3 +31,7 @@ spec:
                 mc version enable local/dvc-data || true
                 mc mb -p local/lakefs-data || true
                 mc version enable local/lakefs-data || true
+                mc mb -p local/datasets || true
+                mc version enable local/datasets || true
+                mc mb -p local/models || true
+                mc version enable local/models || true

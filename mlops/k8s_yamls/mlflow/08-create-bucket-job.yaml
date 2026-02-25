@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-create-bucket
+  namespace: mlflow
+spec:
+  template:
+    spec:
+      containers:
+      - name: create-bucket
+        image: minio/mc:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            # Wait for MinIO to be ready
+            echo "Waiting for MinIO to be ready..."
+            for i in {1..30}; do
+              if mc alias set minio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null 2>&1; then
+                echo "MinIO is ready"
+                break
+              fi
+              echo "MinIO not ready yet, retrying ($i)..."
+              sleep 2
+            done
+            
+            # Create bucket if it doesn't exist
+            echo "Creating MLflow artifact bucket..."
+            if ! mc ls minio/"$MINIO_BUCKET" >/dev/null 2>&1; then
+              mc mb minio/"$MINIO_BUCKET"
+              echo "Bucket created: $MINIO_BUCKET"
+            else
+              echo "Bucket already exists: $MINIO_BUCKET"
+            fi
+            
+            # Set bucket policy for public read (for artifact access)
+            mc anonymous set download minio/"$MINIO_BUCKET"
+            echo "Bucket policy set to allow downloads"
+        env:
+        - name: MINIO_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-secret
+              key: MINIO_BUCKET
+        - name: MINIO_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-secret
+              key: MINIO_ENDPOINT
+        - name: MINIO_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-secret
+              key: MINIO_ACCESS_KEY
+        - name: MINIO_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-secret
+              key: MINIO_SECRET_KEY
+      restartPolicy: Never
+  backoffLimit: 3
