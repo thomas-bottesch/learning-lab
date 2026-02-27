@@ -28,6 +28,8 @@ spec:
               value: "2"
             - name: DRONE_RUNNER_NAME
               value: "drone-runner"
+            - name: DRONE_ENVIRONMENT
+              value: "MLFLOW_ENDPOINT MLFLOW_TRACKING_URI KUBEFLOW_ENDPOINT LAKEFS_ENDPOINT MINIO_ENDPOINT LAKEFS_ACCESS_KEY LAKEFS_SECRET_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY"
             # MLOps Service Endpoints from ConfigMap
             - name: MLFLOW_ENDPOINT
               valueFrom:
