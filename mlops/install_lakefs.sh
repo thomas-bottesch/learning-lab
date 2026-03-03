@@ -34,7 +34,7 @@ spec:
   containers:
     - name: restore
       image: busybox:latest
-      command: ["sh", "-c", "sleep 3600"]
+      command: ["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 1; done"]
       securityContext:
         runAsUser: 0
         runAsGroup: 0
