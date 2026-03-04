@@ -37,7 +37,7 @@ spec:
                 --token "XgsbRVxZ1_RK43W1UpEPCPV3xq4WMXYCAQgRO1Wf33W" \
                 --name k8s-runner \
                 --labels linux \
-                --instance http://host.docker.internal:4000
+                --instance http://172.17.0.1:4000
             fi
 
             echo "Starting runner daemon..."
