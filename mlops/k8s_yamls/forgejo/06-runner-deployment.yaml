@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forgejo-runner
+  namespace: forgejo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: forgejo-runner
+  template:
+    metadata:
+      labels:
+        app: forgejo-runner
+    spec:
+      serviceAccountName: forgejo-runner
+      containers:
+      - name: runner
+        image: data.forgejo.org/forgejo/runner:12.7.0
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -e
+
+            CONFIG_FILE=/data/.runner
+
+            echo "Waiting for Forgejo..."
+            while ! (echo > /dev/tcp/forgejo.forgejo.svc.cluster.local/4000) 2>/dev/null; do
+              sleep 2
+            done
+            echo "Forgejo is up!"
+
+            if [ ! -f "$CONFIG_FILE" ]; then
+              echo "Registering runner..."
+              forgejo-runner register \
+                --no-interactive \
+                --token "-a97-eeVy77Ya8dNLkc7fWoAdxSB8vsc0vZoKw-bCY8" \
+                --name k8s-runner \
+                --labels docker,docker:docker \
+                --instance http://forgejo.forgejo.svc.cluster.local:4000
+            fi
+
+            echo "Starting runner daemon..."
+            exec forgejo-runner daemon
+        volumeMounts:
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+        - name: runner-data
+          mountPath: /data
+        securityContext:
+          runAsUser: 0
+      volumes:
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket
+      - name: runner-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: forgejo-runner
+  namespace: forgejo
+  labels:
+    app: forgejo-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: forgejo-runner
+  namespace: forgejo
+  labels:
+    app: forgejo-runner
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "secrets"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: forgejo-runner
+  namespace: forgejo
+  labels:
+    app: forgejo-runner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: forgejo-runner
+subjects:
+- kind: ServiceAccount
+  name: forgejo-runner
+  namespace: forgejo

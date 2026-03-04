@@ -1,7 +1,0 @@
-{
-  "backup_date": "2026-02-15T19:48:11.677524",
-  "drone_version": "2",
-  "database_file": "database.sqlite",
-  "backup_type": "full",
-  "notes": "Drone CI database backup including user registrations and pipeline state"
-}

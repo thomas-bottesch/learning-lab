@@ -2,9 +2,8 @@
 
 bash install_lakefs.sh
 bash install_minio.sh
-bash install_gitea.sh
+bash install_forgejo.sh
 bash install_mlflow.sh
-bash install_drone.sh
 
 bash create_mlops_configmap.sh
 bash create_mlops_secret.sh

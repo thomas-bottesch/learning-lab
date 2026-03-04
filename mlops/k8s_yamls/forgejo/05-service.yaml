@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: forgejo
+  namespace: forgejo
+spec:
+  type: LoadBalancer
+  selector:
+    app: forgejo
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 3000
+      nodePort: 30400
+    - name: ssh
+      port: 30422
+      targetPort: 22
+      nodePort: 30422
