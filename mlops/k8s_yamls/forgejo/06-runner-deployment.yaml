@@ -34,10 +34,10 @@ spec:
               echo "Registering runner..."
               forgejo-runner register \
                 --no-interactive \
-                --token "-a97-eeVy77Ya8dNLkc7fWoAdxSB8vsc0vZoKw-bCY8" \
+                --token "XgsbRVxZ1_RK43W1UpEPCPV3xq4WMXYCAQgRO1Wf33W" \
                 --name k8s-runner \
-                --labels docker,docker:docker \
-                --instance http://forgejo.forgejo.svc.cluster.local:4000
+                --labels linux \
+                --instance http://host.docker.internal:4000
             fi
 
             echo "Starting runner daemon..."
