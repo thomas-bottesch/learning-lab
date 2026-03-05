@@ -1,0 +1,90 @@
+name: MLOps Training Pipeline
+
+on:
+  push:
+    branches: [ master, develop ]
+  pull_request:
+    branches: [ master, develop ]
+  workflow_dispatch:
+
+env:
+  PROJECT_NAME: mlops-example
+  REPOSITORY_NAME: ${{ github.event.repository.name }}
+  COMMIT_SHA: ${{ github.sha }}
+  BRANCH: ${{ github.ref_name }}
+
+jobs:
+  validate:
+    name: Validate Code Structure
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Ensure Python 3.12 is used
+        run: |
+          python3.12 --version
+          python3.12 -m venv venv
+          . venv/bin/activate
+          pip install --upgrade pip
+      
+      - name: Check Python syntax
+        run: |
+          echo "Testing training script structure..."
+          
+          echo "1. Checking Python syntax..."
+          python -m py_compile train.py && echo "✓ train.py syntax OK"
+          python -m py_compile utils/mlops_utils.py && echo "✓ mlops_utils.py syntax OK"
+          
+          echo "2. Checking requirements.txt..."
+          if [ -f requirements.txt ]; then
+              echo "✓ requirements.txt exists"
+              cat requirements.txt
+          else
+              echo "✗ requirements.txt missing"
+              exit 1
+          fi
+          
+          echo "3. Checking Dockerfile..."
+          if [ -f Dockerfile ]; then
+              echo "✓ Dockerfile exists"
+              grep FROM Dockerfile || echo "No FROM line found"
+          else
+              echo "✗ Dockerfile missing"
+              exit 1
+          fi
+          
+          echo "4. Checking MLOps utilities structure..."
+          if [ -d utils/kubeflow ]; then
+              echo "✓ Kubeflow utilities exist"
+              ls -la utils/kubeflow/
+          else
+              echo "✗ Kubeflow utilities missing"
+              exit 1
+          fi
+          echo "✅ All structural checks passed!"
+
+  build:
+    name: Build Training Image
+    runs-on: linux
+    needs: validate
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build Docker image
+        run: |
+          echo "Building Docker image..."
+
+          IMAGE_NAME="${{ github.repository_owner }}-${{ env.REPOSITORY_NAME }}"
+          TAG=$(echo "${{ env.COMMIT_SHA }}" | cut -c1-8)
+          
+          echo "Building: ${IMAGE_NAME}:${TAG}"
+          docker build -t ${IMAGE_NAME}:${TAG} -t ${IMAGE_NAME}:latest .
+          
+          echo "✅ Docker image built successfully!"
+          docker images | grep ${IMAGE_NAME}

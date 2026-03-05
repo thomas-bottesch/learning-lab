@@ -1,0 +1,67 @@
+# MLOps Configuration for Expert Workflow
+# Users only need to modify this file to configure their MLOps pipeline
+
+# Project Configuration
+project:
+  name: "iris-classification"
+  description: "Iris flower classification model"
+  version: "1.0.0"
+  
+# Data Configuration
+data:
+  source: "sklearn.datasets.load_iris"  # Can be: local_path, s3_path, lakefs_path
+  preprocessing:
+    test_size: 0.2
+    random_state: 42
+    stratify: true
+  
+# Model Configuration
+model:
+  type: "LogisticRegression"
+  hyperparameters:
+    max_iter: 200
+    random_state: 42
+    solver: "lbfgs"
+    multi_class: "auto"
+  
+# MLOps Services Configuration
+services:
+  mlflow:
+    experiment_name: "iris-classification"
+    registered_model_name: "iris-classifier"
+    
+  lakefs:
+    repository: "mlops-data"
+    branch: "main"
+    data_path: "datasets/iris"
+    
+  minio:
+    model_bucket: "models"
+    data_bucket: "datasets"
+    
+  kubeflow:
+    pipeline_name: "iris-training-pipeline"
+    pipeline_description: "End-to-end iris classification training"
+    
+# Pipeline Triggers
+triggers:
+  git_push: true
+  schedule: "0 0 * * *"  # Daily at midnight
+  manual: true
+  
+# Quality Gates
+quality_gates:
+  accuracy_threshold: 0.85
+  data_quality_checks: true
+  model_drift_monitoring: true
+  
+# Notifications
+notifications:
+  slack_webhook: ""  # Optional: Slack webhook URL
+  email: ""  # Optional: Email address
+  
+# Artifact Retention
+retention:
+  mlflow_runs: 30  # days
+  minio_models: 90  # days
+  lakefs_snapshots: 180  # days
