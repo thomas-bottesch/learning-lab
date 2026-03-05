@@ -230,7 +230,7 @@ setup_and_push_repo() {
     
     mkdir -p "$TMP_PROJECT_DIR"
     echo "Copying files from '$SOURCE_DIR' to '$TMP_PROJECT_DIR'..."
-    cp -r "$SOURCE_DIR"/* "$TMP_PROJECT_DIR/"
+    cp -r "$SOURCE_DIR"/. "$TMP_PROJECT_DIR/"
     
     cd "$TMP_PROJECT_DIR"
     

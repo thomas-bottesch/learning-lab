@@ -61,6 +61,23 @@ DB_BACKUP_PATH="$SCRIPT_DIR/forgejo-prepared-db"
 
 print_header "Forgejo Installation Script"
 
+# Build CI Docker image if it doesn't exist
+print_section "Checking CI Docker image"
+CI_IMAGE_NAME="forgejo-runner-python3.12:latest"
+CI_DOCKERFILE="host_config/docker_images/Dockerfile.ci"
+
+if sudo docker image ls | grep -q "^forgejo-runner-python3.12.*latest"; then
+    print_success "CI image $CI_IMAGE_NAME already exists, skipping build"
+else
+    print_info "Building CI image $CI_IMAGE_NAME..."
+    if sudo docker build -t "$CI_IMAGE_NAME" -f "$CI_DOCKERFILE" .; then
+        print_success "CI image built successfully"
+    else
+        print_error "Failed to build CI image"
+        exit 1
+    fi
+fi
+
 # Check for saved database backup first
 if [ -f "$DB_BACKUP_PATH/db.tar.gz" ]; then
     print_info "Found saved database backup at $DB_BACKUP_PATH/db.tar.gz"

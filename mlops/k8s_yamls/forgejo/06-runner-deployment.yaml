@@ -16,20 +16,40 @@ spec:
       serviceAccountName: forgejo-runner
       containers:
       - name: runner
-        image: data.forgejo.org/forgejo/runner:12.7.0
+        image: forgejo-runner-python3.12:latest
+        imagePullPolicy: IfNotPresent
         command: ["/bin/bash", "-c"]
         args:
           - |
             set -e
 
+            echo "OS Information:"
+            cat /etc/os-release
+            echo "Node version:"
+            node --version
+            echo "Python version:"
+            python --version
+            python3 --version
+            python3.12 --version
+            echo "Git version:"
+            git --version
+
             CONFIG_FILE=/data/.runner
 
+            # Install Forgejo runner
+            FORGEJO_RUNNER_VERSION=12.7.0
+            curl -L -o /usr/local/bin/forgejo-runner \
+              https://code.forgejo.org/forgejo/runner/releases/download/v${FORGEJO_RUNNER_VERSION}/forgejo-runner-${FORGEJO_RUNNER_VERSION}-linux-amd64
+            chmod +x /usr/local/bin/forgejo-runner
+
+            # Wait for Forgejo
             echo "Waiting for Forgejo..."
             while ! (echo > /dev/tcp/forgejo.forgejo.svc.cluster.local/4000) 2>/dev/null; do
               sleep 2
             done
             echo "Forgejo is up!"
 
+            # Register runner
             if [ ! -f "$CONFIG_FILE" ]; then
               echo "Registering runner..."
               forgejo-runner register \
@@ -40,8 +60,25 @@ spec:
                 --instance http://172.17.0.1:4000
             fi
 
+            CONFIG=/actions-runner/config.yaml
+
+            echo "Docker socket permissions:"
+            ls -l /var/run/docker.sock
+
+            if [ ! -f "$CONFIG" ]; then
+            cat <<EOF > $CONFIG
+            runner:
+              capacity: 1
+
+            container:
+              options: "-v /var/run/docker.sock:/var/run/docker.sock"
+              valid_volumes:
+                - /var/run/docker.sock
+            EOF
+            fi
+
             echo "Starting runner daemon..."
-            exec forgejo-runner daemon
+            exec forgejo-runner daemon --config $CONFIG
         volumeMounts:
         - name: docker-sock
           mountPath: /var/run/docker.sock
