@@ -1,0 +1,44 @@
+# Custom Forgejo Runner Image with Python 3.12
+# This image extends the official Actions Runner with Python 3.12 support
+
+FROM ghcr.io/actions/actions-runner:2.330.0
+
+# Switch to root user for package installation
+USER root
+
+# Install Node.js 20 LTS from NodeSource (required for modern Actions)
+RUN apt-get update && \
+    apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    add-apt-repository ppa:deadsnakes/ppa -y && \
+    apt-get install -y nodejs
+
+# Install Python 3.12 and dependencies
+RUN apt-get update && \
+    apt-get install -y software-properties-common lsb-release && \
+    apt-get install -y \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    python3-pip \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for python and python3 to point to python3.12
+# These need to be created as root
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python && \
+    ln -sf /usr/bin/python3.12 /usr/bin/python3
+
+# Switch back to runner user
+USER runner
+
+# Verify all installations
+RUN node --version && \
+    python3.12 --version && \
+    python --version && \
+    git --version
+
+# Set working directory
+WORKDIR /actions-runner
+
+CMD ["/bin/bash"]
