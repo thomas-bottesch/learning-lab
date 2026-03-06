@@ -16,6 +16,6 @@ echo "All MinIO YAMLs applied successfully."
 echo "Waiting for MinIO deployment to be ready..."
 kubectl rollout status deployment/minio -n minio --timeout=5m
 
-# Port-forward MinIO Console to host
-echo "Starting port-forward for MinIO Console (port 9001)..."
-screen -dmS minio-port kubectl -n minio port-forward svc/minio 9001:9001
+# MinIO is now accessible via LoadBalancer:
+# - API: http://localhost:9000
+# - Console: http://localhost:9001

@@ -118,7 +118,7 @@ fi
 
 # Port-forward lakeFS UI to host
 echo "Starting port-forward for lakeFS UI (port 8000)..."
-screen -dmS lakefs-port kubectl -n lakefs port-forward svc/lakefs 8000:8000
+#screen -dmS lakefs-port kubectl -n lakefs port-forward svc/lakefs 8000:8000
 
 echo ""
 echo "=========================================="

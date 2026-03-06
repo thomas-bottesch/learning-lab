@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: istio-ingressgateway-lb
+  namespace: istio-system
+spec:
+  type: LoadBalancer
+  selector:
+    app: istio-ingressgateway
+    istio: ingressgateway
+  ports:
+  - name: http2
+    port: 8080
+    targetPort: 8080
+    protocol: TCP

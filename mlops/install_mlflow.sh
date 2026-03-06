@@ -35,9 +35,12 @@ kubectl wait --for=condition=complete job/mlflow-create-bucket -n mlflow --timeo
 echo "3. Waiting for MLflow deployment to be ready..."
 kubectl rollout status deployment/mlflow -n mlflow --timeout=3m
 
-# Port-forward MLflow UI to host
-echo "5. Starting port-forward for MLflow UI (port 5000)..."
-screen -dmS mlflow-port kubectl -n mlflow port-forward --address 0.0.0.0 svc/mlflow 5000:5000
+# Wait for the LoadBalancer service to be ready
+echo "Waiting for LoadBalancer service to be ready..."
+while ! kubectl -n mlflow get svc mlflow -o jsonpath='{.status.loadBalancer.ingress[0].ip}' >/dev/null 2>&1; do
+    echo "Waiting for LoadBalancer IP..."
+    sleep 2
+done
 
 # Wait for MLflow web server
 echo "6. Waiting for MLflow web server to be available..."

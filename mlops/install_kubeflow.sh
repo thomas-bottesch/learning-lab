@@ -35,8 +35,18 @@ while ! kustomize build example | kubectl apply --server-side --force-conflicts 
     sleep 20
 done
 
-# Expose the kubeflow dashboard via port-forwarding
-screen -dmS kubeflow-port kubectl -n istio-system port-forward svc/istio-ingressgateway 8080:80
+# Expose the kubeflow dashboard via LoadBalancer (more resilient than port-forwarding)
+kubectl apply -f "$SCRIPT_DIR/k8s_yamls/kubeflow/ingressgateway-loadbalancer.yaml"
+
+# Wait for the LoadBalancer service to be ready
+echo "Waiting for LoadBalancer service to be ready..."
+while ! kubectl -n istio-system get svc istio-ingressgateway-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}' >/dev/null 2>&1; do
+    echo "Waiting for LoadBalancer IP..."
+    sleep 2
+done
+
+LB_IP=$(kubectl -n istio-system get svc istio-ingressgateway-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+echo "Kubeflow dashboard is accessible at: http://localhost:8080"
 
 # Create example notebooks
 # we need to cd into the dir of this script
