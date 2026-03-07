@@ -17,22 +17,17 @@ logger = logging.getLogger(__name__)
 
 def get_kfp_client():
     """
-    Get Kubeflow Pipelines client.
+    Get Kubeflow Pipelines client with authentication.
 
     Returns:
         kfp.Client instance
     """
     try:
-        from kfp import Client
+        from .kfp_client_utils import get_kfp_client as get_authenticated_client
 
-        # Get Kubeflow endpoint from environment or use default
-        kubeflow_host = os.getenv(
-            "KUBEFLOW_HOST",
-            "http://istio-ingressgateway.istio-system.svc.cluster.local",
-        )
+        client = get_authenticated_client()
 
-        client = Client(host=f"{kubeflow_host}/pipeline")
-        logger.info(f"Connected to Kubeflow at {kubeflow_host}")
+        logger.info("Successfully connected to Kubeflow!")
         return client
 
     except ImportError as e:
@@ -112,8 +107,25 @@ def upload_pipeline(
             description=description,
         )
 
-        logger.info(f"Pipeline uploaded with ID: {pipeline.id}")
-        return pipeline.id
+        # Handle both v1 and v2 beta pipeline objects
+        pipeline_id = None
+        if hasattr(pipeline, "id"):
+            pipeline_id = pipeline.id
+        elif hasattr(pipeline, "pipeline_id"):
+            pipeline_id = pipeline.pipeline_id
+        elif hasattr(pipeline, "pipeline_spec_id"):
+            pipeline_id = pipeline.pipeline_spec_id
+        else:
+            # Try to get from __dict__ or as last resort
+            try:
+                pipeline_id = str(pipeline)
+            except:
+                raise RuntimeError(
+                    f"Could not extract pipeline ID from pipeline object: {type(pipeline)}"
+                )
+
+        logger.info(f"Pipeline uploaded with ID: {pipeline_id}")
+        return pipeline_id
 
     except Exception as e:
         logger.error(f"Failed to upload pipeline: {e}")
@@ -136,19 +148,37 @@ def create_experiment(
     Returns:
         Experiment ID
     """
+
+    def get_experiment_id(experiment):
+        """Extract experiment ID from different experiment object types."""
+        if hasattr(experiment, "experiment_id"):
+            return experiment.experiment_id
+        elif hasattr(experiment, "id"):
+            return experiment.id
+        elif hasattr(experiment, "experiment_spec_id"):
+            return experiment.experiment_spec_id
+        else:
+            # Try to get from __dict__ or as last resort
+            try:
+                return str(experiment)
+            except:
+                raise RuntimeError(
+                    f"Could not extract experiment ID from experiment object: {type(experiment)}"
+                )
+
     try:
         # Try to get existing experiment
         try:
             experiment = client.get_experiment(experiment_name=experiment_name)
             logger.info(f"Using existing experiment: {experiment_name}")
-            return experiment.id
+            return get_experiment_id(experiment)
         except:
             # Create new experiment
             experiment = client.create_experiment(
                 name=experiment_name, description=description
             )
             logger.info(f"Created new experiment: {experiment_name}")
-            return experiment.id
+            return get_experiment_id(experiment)
 
     except Exception as e:
         logger.error(f"Failed to create experiment: {e}")
@@ -254,6 +284,7 @@ def submit_pipeline(
         )
 
         # Step 3: Create experiment
+
         logger.info("Step 3: Setting up experiment...")
         experiment_id = create_experiment(
             client=client,

@@ -94,7 +94,7 @@ run_local_training() {
     
     if [[ ! -f "venv/requirements_installed" ]]; then
         print_info "Installing Python dependencies..."
-        pip install -r requirements.txt
+        uv pip install -r requirements.txt
         touch venv/requirements_installed
     fi
     

@@ -24,6 +24,14 @@ RUN apt-get update && \
     docker.io \
     && rm -rf /var/lib/apt/lists/*
 
+# Install uv (fast Python package manager)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    /root/.local/bin/uv --version && \
+    cp /root/.local/bin/uv /usr/local/bin/uv && \
+    chmod +x /usr/local/bin/uv && \
+    ln -sf /usr/local/bin/uv /usr/local/bin/pip && \
+    ln -sf /usr/local/bin/uv /usr/local/bin/pip3
+
 # Create symlinks for python and python3 to point to python3.12
 # These need to be created as root
 RUN ln -sf /usr/bin/python3.12 /usr/bin/python && \
@@ -36,6 +44,7 @@ USER runner
 RUN node --version && \
     python3.12 --version && \
     python --version && \
+    uv --version && \
     git --version
 
 # Set working directory

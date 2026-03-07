@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: user-example-com-edit
+  namespace: user-example-com
+subjects:
+- kind: User
+  name: user@example.com
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: kubeflow-edit
+  apiGroup: rbac.authorization.k8s.io

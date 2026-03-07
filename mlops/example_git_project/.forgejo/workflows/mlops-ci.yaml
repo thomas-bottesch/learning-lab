@@ -19,6 +19,10 @@ jobs:
     runs-on: linux
     container:
       image: forgejo-runner-python3.12:latest
+    env:
+      KUBEFLOW_HOST: ${{ vars.KUBEFLOW_HOST }}
+      KUBEFLOW_USERNAME: ${{ vars.KUBEFLOW_USERNAME }}
+      KUBEFLOW_PASSWORD: ${{ secrets.KUBEFLOW_PASSWORD }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,9 +30,10 @@ jobs:
       - name: Ensure Python 3.12 is used
         run: |
           python3.12 --version
+          uv --version
           python3.12 -m venv venv
           . venv/bin/activate
-          pip install --upgrade pip
+          uv pip install --upgrade pip
       
       - name: Check Python syntax
         run: |
@@ -72,6 +77,10 @@ jobs:
     needs: validate
     container:
       image: forgejo-runner-python3.12:latest
+    env:
+      KUBEFLOW_HOST: ${{ vars.KUBEFLOW_HOST }}
+      KUBEFLOW_USERNAME: ${{ vars.KUBEFLOW_USERNAME }}
+      KUBEFLOW_PASSWORD: ${{ secrets.KUBEFLOW_PASSWORD }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -88,3 +97,90 @@ jobs:
           
           echo "✅ Docker image built successfully!"
           docker images | grep ${IMAGE_NAME}
+
+  create_initial_data:
+    name: Create Initial Data
+    runs-on: linux
+    needs: build
+    container:
+      image: forgejo-runner-python3.12:latest
+    env:
+      KUBEFLOW_HOST: ${{ vars.KUBEFLOW_HOST }}
+      KUBEFLOW_USERNAME: ${{ vars.KUBEFLOW_USERNAME }}
+      KUBEFLOW_PASSWORD: ${{ secrets.KUBEFLOW_PASSWORD }}
+      KUBEFLOW_NAMESPACE: ${{ vars.KUBEFLOW_NAMESPACE }}
+      MINIO_ENDPOINT: ${{ vars.MINIO_ENDPOINT }}
+      MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+      MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+      LAKEFS_ENDPOINT: ${{ vars.LAKEFS_ENDPOINT }}
+      LAKEFS_ACCESS_KEY: ${{ secrets.LAKEFS_ACCESS_KEY }}
+      LAKEFS_SECRET_KEY: ${{ secrets.LAKEFS_SECRET_KEY }}
+      LAKEFS_BUCKET_NAME: ${{ vars.LAKEFS_BUCKET_NAME }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python environment
+        run: |
+          echo "Setting up Python environment..."
+          python3.12 -m venv venv
+          . venv/bin/activate
+          uv pip install --upgrade pip
+          uv pip install -r requirements.txt
+      
+      - name: Compile LakeFS initial data pipeline
+        run: |
+          echo "Compiling LakeFS initial data pipeline..."
+          . venv/bin/activate
+          python create_initial_data_pipeline.py --output lakefs_initial_data_pipeline.yaml
+          echo "✅ Pipeline compiled successfully!"
+      
+      - name: Submit pipeline to Kubeflow
+        run: |
+          echo "Submitting LakeFS initial data pipeline to Kubeflow..."
+          . venv/bin/activate
+          env
+          # Import and use the submitter
+          python -c "
+          import os
+          import sys
+          from utils.kubeflow.pipeline_submitter import submit_pipeline
+          
+          result = submit_pipeline(
+              pipeline_path='lakefs_initial_data_pipeline.yaml',
+              pipeline_name='lakefs-initial-data-setup',
+              experiment_name='initial-data-setup',
+              run_name=f'initial-data-setup-${{ env.COMMIT_SHA }}',
+              additional_params={'lakefs_repository': 'mlops-data'}
+          )
+          
+          print('Pipeline submitted successfully!')
+          print(f'Run ID: {result[\"run_id\"]}')
+          "
+          echo "✅ LakeFS initial data pipeline submitted successfully!"
+      
+      - name: Summary
+        run: |
+          echo "=========================================="
+          echo "✅ Initial Data Setup Pipeline Completed"
+          echo "=========================================="
+          echo ""
+          echo "What was accomplished:"
+          echo "  1. ✅ Created LakeFS repository 'mlops-data'"
+          echo "  2. ✅ Initialized main branch"
+          echo "  3. ✅ Uploaded iris dataset to main branch"
+          echo "  4. ✅ Created dataset metadata"
+          echo "  5. ✅ Added README documentation"
+          echo ""
+          echo "The iris dataset is now available in LakeFS at:"
+          echo "  s3://mlops-data/main/iris/dataset.json"
+          echo ""
+          echo "Future pipelines can now:"
+          echo "  - Create experiment branches from main"
+          echo "  - Read versioned data from specific branches"
+          echo "  - Ensure reproducibility through data versioning"
+          echo ""
+          echo "Next steps:"
+          echo "  1. Monitor pipeline execution in Kubeflow UI"
+          echo "  2. Verify data in LakeFS: http://localhost:8000"
+          echo "  3. Future training pipelines will read from this data"

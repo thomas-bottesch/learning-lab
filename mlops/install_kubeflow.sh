@@ -52,3 +52,7 @@ echo "Kubeflow dashboard is accessible at: http://localhost:8080"
 # we need to cd into the dir of this script
 cd "$SCRIPT_DIR"
 kubectl apply -f k8s_yamls/kubeflow/user-profile.yaml
+
+# Create RoleBinding to grant user permissions
+echo "Creating RoleBinding for user permissions..."
+kubectl apply -f k8s_yamls/kubeflow/user-rolebinding.yaml

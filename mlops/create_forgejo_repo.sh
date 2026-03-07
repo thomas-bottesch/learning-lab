@@ -142,47 +142,85 @@ setup_actions_secrets() {
     local target_namespace="$1"
     
     echo ""
-    echo "Setting up Forgejo Actions secrets..."
+    echo "Setting up Forgejo Actions secrets and variables..."
     
     # Temporarily disable error checking for this function
     set +e
     
     # Extract Kubeflow username from user-profile.yaml
-    KUBEFLOW_USERNAME=$(grep 'name: user@example.com' "$KUBEFLOW_YAML_DIR/user-profile.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ' || echo "user@example.com")
+    KUBEFLOW_USERNAME=$(grep 'name: user@example.com' "$KUBEFLOW_YAML_DIR/user-profile.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
     
     # Extract endpoints from configmap
-    MINIO_ENDPOINT=$(grep 'MINIO_ENDPOINT:' "$KUBEFLOW_YAML_DIR/mlops-endpoints-configmap.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ' || echo "http://minio.minio.svc.cluster.local:9000")
-    LAKEFS_ENDPOINT=$(grep 'LAKEFS_ENDPOINT:' "$KUBEFLOW_YAML_DIR/mlops-endpoints-configmap.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ' || echo "http://lakefs.lakefs.svc.cluster.local:8000")
-    LAKEFS_BUCKET_NAME=$(grep 'LAKEFS_BUCKET_NAME:' "$KUBEFLOW_YAML_DIR/mlops-endpoints-configmap.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ' || echo "lakefs-data")
-    DVC_BUCKET_NAME=$(grep 'DVC_BUCKET_NAME:' "$KUBEFLOW_YAML_DIR/mlops-endpoints-configmap.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ' || echo "dvc-data")
+    MINIO_ENDPOINT=$(grep 'MINIO_ENDPOINT:' "$KUBEFLOW_YAML_DIR/mlops-endpoints-configmap.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
+    LAKEFS_ENDPOINT=$(grep 'LAKEFS_ENDPOINT:' "$KUBEFLOW_YAML_DIR/mlops-endpoints-configmap.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
+    LAKEFS_BUCKET_NAME=$(grep 'LAKEFS_BUCKET_NAME:' "$KUBEFLOW_YAML_DIR/mlops-endpoints-configmap.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
+    DVC_BUCKET_NAME=$(grep 'DVC_BUCKET_NAME:' "$KUBEFLOW_YAML_DIR/mlops-endpoints-configmap.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
     
     # Extract MLflow and MinIO credentials from their secrets
-    MINIO_ACCESS_KEY=$(grep 'MINIO_ACCESS_KEY:' "$SCRIPT_DIR/k8s_yamls/minio/02-secret.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ' || echo "minioadmin")
-    MINIO_SECRET_KEY=$(grep 'MINIO_ROOT_PASSWORD:' "$SCRIPT_DIR/k8s_yamls/minio/02-secret.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ' || echo "minioadmin123")
+    MINIO_ACCESS_KEY=$(grep 'MINIO_ROOT_USER:' "$SCRIPT_DIR/k8s_yamls/minio/02-secret.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
+    MINIO_SECRET_KEY=$(grep 'MINIO_ROOT_PASSWORD:' "$SCRIPT_DIR/k8s_yamls/minio/02-secret.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
+    
     MLFLOW_TRACKING_URI="http://mlflow.mlflow.svc.cluster.local:5000"
     
-    # Internal cluster service URLs (for runners inside k3s)
-    KUBEFLOW_HOST="http://kubeflow.kubeflow.svc.cluster.local:8080"
-    KUBEFLOW_PASSWORD="12341234"
+    # Extract LakeFS credentials from its secrets
+    LAKEFS_ACCESS_KEY=$(grep 'LAKEFS_AUTH_ADMIN_ACCESS_KEY_ID:' "$SCRIPT_DIR/k8s_yamls/lakefs/02-secret.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
+    LAKEFS_SECRET_KEY=$(grep 'LAKEFS_AUTH_ADMIN_SECRET_ACCESS_KEY:' "$SCRIPT_DIR/k8s_yamls/lakefs/02-secret.yaml" 2>/dev/null | awk -F': ' '{print $2}' | tr -d '" ')
     
+    # Internal cluster service URLs (for runners inside k3s)
+    KUBEFLOW_HOST="http://172.17.0.1:8080"
+    KUBEFLOW_PASSWORD="12341234"
+    KUBEFLOW_NAMESPACE="user-example-com"
+
     echo "  Extracted configuration:"
     echo "    KUBEFLOW_USERNAME: $KUBEFLOW_USERNAME"
     echo "    MINIO_ENDPOINT: $MINIO_ENDPOINT"
     echo "    LAKEFS_ENDPOINT: $LAKEFS_ENDPOINT"
     echo ""
     
-    # Set up secrets for Actions
-    local secrets=(
+    # Set up VARIABLES (non-sensitive data: hostnames, endpoints, bucket names, namespaces, usernames)
+    echo "  Setting up variables (non-sensitive data)..."
+    local variables=(
         "KUBEFLOW_HOST:$KUBEFLOW_HOST"
         "KUBEFLOW_USERNAME:$KUBEFLOW_USERNAME"
-        "KUBEFLOW_PASSWORD:$KUBEFLOW_PASSWORD"
+        "DEX_USERNAME:$KUBEFLOW_USERNAME"
         "MLFLOW_TRACKING_URI:$MLFLOW_TRACKING_URI"
         "MINIO_ENDPOINT:$MINIO_ENDPOINT"
-        "MINIO_ACCESS_KEY:$MINIO_ACCESS_KEY"
-        "MINIO_SECRET_KEY:$MINIO_SECRET_KEY"
         "LAKEFS_ENDPOINT:$LAKEFS_ENDPOINT"
         "LAKEFS_BUCKET_NAME:$LAKEFS_BUCKET_NAME"
         "DVC_BUCKET_NAME:$DVC_BUCKET_NAME"
+        "KUBEFLOW_NAMESPACE:$KUBEFLOW_NAMESPACE"
+    )
+    
+    for variable_pair in "${variables[@]}"; do
+        IFS=':' read -r variable_name variable_value <<< "$variable_pair"
+        
+        echo "  Creating variable: $variable_name"
+        local response
+        response=$(curl -s -X POST "$FORGEJO_URL/api/v1/repos/$target_namespace/$REPO_NAME/actions/variables/$variable_name" \
+            -u "$FORGEJO_USER:$FORGEJO_PASSWORD" \
+            -H "Content-Type: application/json" \
+            -d "{\"value\": \"$variable_value\"}" 2>/dev/null || echo "{}")
+        
+        if echo "$response" | grep -q '"message"' && ! echo "$response" | grep -q '"updated"\|"created"'; then
+            echo "  ⚠️  Warning: Could not set variable '$variable_name'"
+            echo "     Response: $response"
+        else
+            echo "  ✓ Variable '$variable_name' created/updated"
+        fi
+    done
+    
+    # Set up SECRETS (sensitive data: passwords, access keys, secret keys)
+    echo ""
+    echo "  Setting up secrets (sensitive data)..."
+    local secrets=(
+        "KUBEFLOW_PASSWORD:$KUBEFLOW_PASSWORD"
+        "DEX_PASSWORD:$KUBEFLOW_PASSWORD"
+        "MINIO_ACCESS_KEY:$MINIO_ACCESS_KEY"
+        "MINIO_SECRET_KEY:$MINIO_SECRET_KEY"
+        "LAKEFS_ACCESS_KEY:$LAKEFS_ACCESS_KEY"
+        "LAKEFS_SECRET_KEY:$LAKEFS_SECRET_KEY"
+        "AWS_ACCESS_KEY_ID:$MINIO_ACCESS_KEY"
+        "AWS_SECRET_ACCESS_KEY:$MINIO_SECRET_KEY"
     )
     
     for secret_pair in "${secrets[@]}"; do
@@ -204,7 +242,7 @@ setup_actions_secrets() {
     done
     
     echo ""
-    echo "✓ Actions secrets configured!"
+    echo "✓ Actions secrets and variables configured!"
     echo ""
     echo "  ⚠️  IMPORTANT: Please update these secrets in repository settings:"
     echo "  Repository → Settings → Secrets → Actions"
@@ -212,7 +250,8 @@ setup_actions_secrets() {
     echo "  Required updates:"
     echo "  - KUBEFLOW_PASSWORD: Set your actual Kubeflow password"
     echo ""
-    echo "  All other secrets have been auto-configured with internal cluster URLs."
+    echo "  All other secrets and variables have been auto-configured with internal cluster URLs."
+    echo "  Non-sensitive data (hostnames, endpoints, bucket names, namespaces) are stored as variables."
     
     # Re-enable error checking
     set -e
