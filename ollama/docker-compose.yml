@@ -1,0 +1,31 @@
+services:
+  ollama:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    container_name: ollama-server
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      # Map local models directory to container's Ollama models directory
+      - ./ollama_models:/home/vscode/.ollama/models
+      # Map workspace for development
+      - .:/workspace
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_MODEL=qwen3.5:35b-a3b
+      # CUDA environment variables for GPU support
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    # Entrypoint script handles model pulling and server startup
+    stdin_open: true
+    tty: true
