@@ -52,6 +52,9 @@ RUN curl -fsSL https://ollama.com/install.sh | sh
 # Set Ollama environment variables
 ENV OLLAMA_HOST=0.0.0.0
 ENV OLLAMA_ORIGINS=*
+ENV OLLAMA_KEEP_ALIVE=0
+ENV OLLAMA_NUM_PARALLEL=1
+ENV OLLAMA_MAX_LOADED_MODELS=1
 
 # Create Ollama models directory in user's home and set permissions
 RUN mkdir -p /home/${MY_USERNAME}/.ollama/models \
