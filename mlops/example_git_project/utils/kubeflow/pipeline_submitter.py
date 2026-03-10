@@ -83,49 +83,50 @@ def upload_pipeline(
     client,
     pipeline_path: str,
     pipeline_name: str,
+    version_name: str = "auto-version",
     description: str = "Expert MLOps training pipeline",
-) -> str:
+) -> tuple[str, str]:
     """
-    Upload pipeline to Kubeflow.
-
-    Args:
-        client: Kubeflow client
-        pipeline_path: Path to pipeline YAML
-        pipeline_name: Name of the pipeline
-        description: Pipeline description
+    Upload a Kubeflow pipeline and explicitly create a pipeline version.
 
     Returns:
-        Pipeline ID
+        (pipeline_id, version_id)
     """
+
     try:
         logger.info(f"Uploading pipeline: {pipeline_name}")
 
-        # Upload to Kubeflow
+        # 1️⃣ Create / upload pipeline
         pipeline = client.upload_pipeline(
             pipeline_package_path=pipeline_path,
             pipeline_name=pipeline_name,
             description=description,
         )
 
-        # Handle both v1 and v2 beta pipeline objects
-        pipeline_id = None
-        if hasattr(pipeline, "id"):
-            pipeline_id = pipeline.id
-        elif hasattr(pipeline, "pipeline_id"):
-            pipeline_id = pipeline.pipeline_id
-        elif hasattr(pipeline, "pipeline_spec_id"):
-            pipeline_id = pipeline.pipeline_spec_id
-        else:
-            # Try to get from __dict__ or as last resort
-            try:
-                pipeline_id = str(pipeline)
-            except:
-                raise RuntimeError(
-                    f"Could not extract pipeline ID from pipeline object: {type(pipeline)}"
-                )
+        pipeline_id = str(
+            getattr(pipeline, "id", None) or getattr(pipeline, "pipeline_id")
+        )
 
-        logger.info(f"Pipeline uploaded with ID: {pipeline_id}")
-        return pipeline_id
+        if not pipeline_id:
+            raise RuntimeError("Failed to extract pipeline_id")
+
+        logger.info(f"Pipeline uploaded: {pipeline_id}")
+
+        # 2️⃣ Explicitly create version (this avoids the async default-version bug)
+        version = client.upload_pipeline_version(
+            pipeline_package_path=pipeline_path,
+            pipeline_id=pipeline_id,
+            pipeline_version_name=version_name,
+        )
+
+        version_id = str(version.pipeline_version_id)
+
+        if not version_id:
+            raise RuntimeError("Failed to extract version_id")
+
+        logger.info(f"Pipeline version created: {version_id}")
+
+        return pipeline_id, version_id
 
     except Exception as e:
         logger.error(f"Failed to upload pipeline: {e}")
@@ -191,6 +192,7 @@ def run_pipeline(
     experiment_id: str,
     git_info: Dict[str, str],
     run_name: Optional[str] = None,
+    version_id: Optional[str] = None,
     additional_params: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
@@ -202,6 +204,7 @@ def run_pipeline(
         experiment_id: ID of experiment
         git_info: Git information dictionary
         run_name: Custom run name
+        version_id: Optional version ID (required when running from existing template)
         additional_params: Additional pipeline parameters
 
     Returns:
@@ -231,14 +234,25 @@ def run_pipeline(
         logger.info(f"Starting pipeline run: {run_name}")
         logger.info(f"Parameters: {params}")
         logger.info(f"Docker image: {params['training_image']}:{params['image_tag']}")
+        if version_id:
+            logger.info(f"Pipeline version ID: {version_id}")
 
-        # Run pipeline
-        run = client.run_pipeline(
-            experiment_id=experiment_id,
-            job_name=run_name,
-            pipeline_id=pipeline_id,
-            params=params,
-        )
+        # Run pipeline - include version_id if provided
+        if version_id:
+            run = client.run_pipeline(
+                experiment_id=experiment_id,
+                job_name=run_name,
+                pipeline_id=pipeline_id,
+                version_id=version_id,
+                params=params,
+            )
+        else:
+            run = client.run_pipeline(
+                experiment_id=experiment_id,
+                job_name=run_name,
+                pipeline_id=pipeline_id,
+                params=params,
+            )
 
         logger.info(f"Pipeline run started with ID: {run.id}")
         logger.info(f"Run URL: {client._get_url_prefix()}/#/runs/details/{run.id}")
@@ -277,7 +291,7 @@ def submit_pipeline(
 
         # Step 2: Upload pipeline
         logger.info("Step 2: Uploading pipeline...")
-        pipeline_id = upload_pipeline(
+        pipeline_id, version_id = upload_pipeline(
             client=client,
             pipeline_path=pipeline_path,
             pipeline_name=pipeline_name,
@@ -304,11 +318,13 @@ def submit_pipeline(
             experiment_id=experiment_id,
             git_info=git_info,
             run_name=run_name,
+            version_id=version_id,
             additional_params=additional_params,
         )
 
         return {
             "pipeline_id": pipeline_id,
+            "version_id": version_id,
             "experiment_id": experiment_id,
             "run_id": run_id,
             "git_commit": git_info.get("commit", "unknown"),
