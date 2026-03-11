@@ -105,6 +105,15 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN python3.12 -m venv ${VIRTUAL_ENV} \
     && chown -R ${MY_USERID}:${MY_GROUPID} ${VIRTUAL_ENV}
 
+# Install ORAS 1.3.0 (OCI Registry As Storage)
+RUN curl -LO https://github.com/oras-project/oras/releases/download/v1.3.0/oras_1.3.0_linux_amd64.tar.gz && \
+    mkdir -p /tmp/oras-install && \
+    tar -zxf oras_1.3.0_linux_amd64.tar.gz -C /tmp/oras-install && \
+    mv /tmp/oras-install/oras /usr/local/bin/oras && \
+    chmod +x /usr/local/bin/oras && \
+    rm -rf oras_1.3.0_linux_amd64.tar.gz /tmp/oras-install && \
+    oras version
+
 USER ${MY_USERNAME}
 
 COPY requirements.txt /tmp/requirements.txt

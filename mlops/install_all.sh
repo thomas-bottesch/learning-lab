@@ -2,6 +2,7 @@
 
 bash install_lakefs.sh
 bash install_minio.sh
+bash install_zot.sh
 bash install_forgejo.sh
 bash install_mlflow.sh
 

@@ -35,3 +35,5 @@ spec:
                 mc version enable local/datasets || true
                 mc mb -p local/models || true
                 mc version enable local/models || true
+                mc mb -p local/zot-registry || true
+                mc version enable local/zot-registry || true
