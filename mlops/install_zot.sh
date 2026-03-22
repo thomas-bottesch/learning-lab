@@ -48,6 +48,22 @@ rm -f /tmp/ml-config.json
 
 echo "ml-components repository created successfully in Zot."
 
+# Push an empty catalog so agents can pull it on a fresh install without getting a 404
+echo "Pushing empty component catalog to Zot..."
+cat > /tmp/empty-catalog.json <<'EOF'
+{
+  "generated_at": null,
+  "components": [],
+  "composition_patterns": []
+}
+EOF
+
+oras push "$REGISTRY/ml-components/catalog:latest" \
+  /tmp/empty-catalog.json:application/vnd.ml.catalog.v1+json
+
+rm -f /tmp/empty-catalog.json
+echo "Empty catalog pushed successfully."
+
 # Zot is now accessible via LoadBalancer:
 # - Registry: http://localhost:8001
 # - v2 API: http://localhost:8001/v2/

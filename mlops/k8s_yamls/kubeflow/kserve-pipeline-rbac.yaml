@@ -1,0 +1,32 @@
+# Grants pipeline run pods (default-editor SA) permission to create and manage
+# KServe InferenceService resources in the user namespace.
+#
+# The model_serving component calls load_incluster_config() and applies an
+# InferenceService CRD. Without this, the call fails with 403 Forbidden.
+#
+# A ClusterRole is used so the same role can be bound in additional team
+# namespaces without redefining it. The RoleBinding scopes it to
+# kubeflow-user-example-com only.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kserve-inferenceservice-manager
+rules:
+- apiGroups: ["serving.kserve.io"]
+  resources: ["inferenceservices"]
+  verbs: ["create", "get", "list", "watch", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kserve-inferenceservice-manager
+  namespace: kubeflow-user-example-com
+subjects:
+- kind: ServiceAccount
+  name: default-editor
+  namespace: kubeflow-user-example-com
+roleRef:
+  kind: ClusterRole
+  name: kserve-inferenceservice-manager
+  apiGroup: rbac.authorization.k8s.io

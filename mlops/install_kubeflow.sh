@@ -56,3 +56,9 @@ kubectl apply -f k8s_yamls/kubeflow/user-profile.yaml
 # Create RoleBinding to grant user permissions
 echo "Creating RoleBinding for user permissions..."
 kubectl apply -f k8s_yamls/kubeflow/user-rolebinding.yaml
+
+# Grant pipeline run pods permission to manage KServe InferenceService resources.
+# The model_serving component uses load_incluster_config() and applies InferenceService
+# CRDs at runtime — without this the call fails with 403 Forbidden.
+echo "Creating KServe RBAC for pipeline pods..."
+kubectl apply -f k8s_yamls/kubeflow/kserve-pipeline-rbac.yaml
