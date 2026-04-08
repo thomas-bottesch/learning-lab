@@ -32,7 +32,8 @@
 				"ms-python.python",
 				"ms-toolsai.jupyter",
 				"ms-python.black-formatter",
-				"eamodio.gitlens"
+				"eamodio.gitlens",
+				"Anthropic.claude-code"
 			]
 		}
 	},
@@ -48,7 +49,11 @@
 		"DISPLAY": ":1",
 		"NVIDIA_VISIBLE_DEVICES": "all",
 		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics",
-		"KUBECONFIG": "/etc/rancher/k3s/k3s.yaml"
+		"KUBECONFIG": "/etc/rancher/k3s/k3s.yaml",
+		"CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+	},
+	"features": {
+		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
 	"mounts": [
 		"source=/usr/lib/x86_64-linux-gnu/nvidia,target=/usr/lib/x86_64-linux-gnu/nvidia,type=bind,consistency=cached",
@@ -59,9 +64,12 @@
 		"source=${localWorkspaceFolder}/.devcontainer/bash_history/.bash_history,target=/home/vscode/.bash_history,type=bind,consistency=cached",
 		"source=${localWorkspaceFolder}/container_config/k9s/config.yaml,target=/home/vscode/.config/k9s/config.yaml,type=bind,consistency=cached",
 		"source=${localWorkspaceFolder}/container_config/k9s/active.yaml,target=/home/vscode/.local/share/k9s/clusters/default/default/config.yaml,type=bind,consistency=cached",
-		"source=/etc/rancher,target=/etc/rancher,type=bind,consistency=cached"
+		"source=/etc/rancher,target=/etc/rancher,type=bind,consistency=cached",
+		"source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
+		"source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude.json,type=bind"
 	],
 	"workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspace/git_repo,type=bind",
 	"workspaceFolder": "/workspace/git_repo/${localWorkspaceFolderBasename}",
+	"postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude && mkdir -p /home/vscode/.claude/{debug,projects,todos}",
 	"remoteUser": "vscode"
 }

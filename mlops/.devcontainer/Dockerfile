@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     docker.io \
     python3.12-venv \
+    yq \
     && rm -rf /var/lib/apt/lists/*
 
 

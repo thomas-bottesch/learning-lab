@@ -22,6 +22,7 @@ RUN apt-get update && \
     python3.12-dev \
     python3-pip \
     docker.io \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager)
@@ -41,10 +42,34 @@ RUN curl -LO https://github.com/oras-project/oras/releases/download/v1.3.0/oras_
     rm -rf oras_1.3.0_linux_amd64.tar.gz /tmp/oras-install && \
     oras version
 
+# Install yq v4 (mikefarah) — used in publish.yaml to extract .version from manifest.yaml.
+# Must be mikefarah/yq (Go binary) — the `yq e '<expr>'` syntax used in the workflows is v4-specific.
+RUN curl -Lo /usr/local/bin/yq \
+    https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64 && \
+    chmod +x /usr/local/bin/yq && \
+    yq --version
+
 # Create symlinks for python and python3 to point to python3.12
 # These need to be created as root
 RUN ln -sf /usr/bin/python3.12 /usr/bin/python && \
     ln -sf /usr/bin/python3.12 /usr/bin/python3
+
+# Pre-install Python packages required by CI workflows into the system Python.
+# Installing here rather than per-job avoids repeated network round-trips on every run.
+#
+#   kfp          — `kfp component build` in publish.yaml (generates Dockerfile + component.yaml)
+#   requests     — generate_catalog.py (ZOT GraphQL search API)
+#   pyyaml       — generate_catalog.py (yaml.safe_load on pulled manifest.yaml)
+#   packaging    — version comparisons in ci.yaml and publish.yaml version-bump checks
+#   build        — `python -m build` to produce the ml-components wheel in publish.yaml
+#   twine        — `twine upload` to push the wheel to the Forgejo PyPI registry
+RUN uv pip install --system --python /usr/bin/python3.12 \
+    kfp \
+    requests \
+    pyyaml \
+    packaging \
+    build \
+    twine
 
 # Switch back to runner user
 USER runner
@@ -54,7 +79,10 @@ RUN node --version && \
     python3.12 --version && \
     python --version && \
     uv --version && \
-    git --version
+    git --version && \
+    jq --version && \
+    yq --version && \
+    python -c "import kfp, requests, yaml, packaging, build, twine; print('Python packages OK')"
 
 # Set working directory
 WORKDIR /actions-runner

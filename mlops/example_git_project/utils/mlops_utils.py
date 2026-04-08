@@ -7,6 +7,7 @@ Common utilities for data versioning, experiment tracking, and artifact manageme
 import os
 import json
 import logging
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, Union
 from pathlib import Path
@@ -215,6 +216,7 @@ class MLOpsClient:
             "mlflow.source.type": "JOB",
             "mlflow.source.name": "Expert MLOps Pipeline",
             "timestamp": datetime.now().isoformat(),
+            "pipeline.run_id": os.getenv("KFP_RUN_ID", str(uuid.uuid4())),
         }
 
         if git_info:
