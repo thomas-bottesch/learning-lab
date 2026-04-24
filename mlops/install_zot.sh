@@ -59,6 +59,7 @@ cat > /tmp/empty-catalog.json <<'EOF'
 EOF
 
 oras push "$REGISTRY/ml-components/catalog:latest" \
+  --disable-path-validation \
   /tmp/empty-catalog.json:application/vnd.ml.catalog.v1+json
 
 rm -f /tmp/empty-catalog.json

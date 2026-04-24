@@ -1,0 +1,23 @@
+# Injects mlops-credentials Secret and pipeline-configmap ConfigMap into every
+# pod created in the user-example-com namespace (including all KFP pipeline pods).
+#
+# Applied once during platform setup via create_mlops_secret.sh, or manually:
+#   kubectl apply -f k8s_yamls/kubeflow/mlops-poddefault.yaml
+#
+# PodDefault uses spec.selector to choose which pods to inject into.
+# matchLabels: {} is an empty selector — it matches all pods in the namespace,
+# so every KFP pipeline pod receives the env vars without any per-pipeline wiring.
+apiVersion: kubeflow.org/v1alpha1
+kind: PodDefault
+metadata:
+  name: mlops-credentials
+  namespace: user-example-com
+spec:
+  selector:
+    matchLabels: {}
+  desc: "Inject MLOps service credentials and endpoints into pipeline pods"
+  envFrom:
+    - secretRef:
+        name: mlops-credentials
+    - configMapRef:
+        name: pipeline-configmap

@@ -179,6 +179,7 @@ setup_actions_secrets() {
     
     # Set up VARIABLES (non-sensitive data: hostnames, endpoints, bucket names, namespaces, usernames)
     echo "  Setting up variables (non-sensitive data)..."
+    PYPI_INDEX_URL="http://172.17.0.1:4000/api/packages/ml-platform/pypi/simple/"
     local variables=(
         "KUBEFLOW_HOST:$KUBEFLOW_HOST"
         "KUBEFLOW_USERNAME:$KUBEFLOW_USERNAME"
@@ -189,6 +190,7 @@ setup_actions_secrets() {
         "LAKEFS_BUCKET_NAME:$LAKEFS_BUCKET_NAME"
         "DVC_BUCKET_NAME:$DVC_BUCKET_NAME"
         "KUBEFLOW_NAMESPACE:$KUBEFLOW_NAMESPACE"
+        "PYPI_INDEX_URL:$PYPI_INDEX_URL"
     )
     
     for variable_pair in "${variables[@]}"; do

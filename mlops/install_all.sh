@@ -1,4 +1,10 @@
-# Order is important because some secrets and configmaps are based on the previous installations
+#!/bin/bash
+# install_all.sh: Full platform install. Order is critical — some secrets and
+# ConfigMaps are derived from previous installations.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 bash install_lakefs.sh
 bash install_minio.sh

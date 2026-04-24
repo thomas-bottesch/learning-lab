@@ -63,3 +63,9 @@ Keys:
 Verify:
   kubectl -n $TARGET_NAMESPACE get secret $TARGET_SECRET_NAME -o jsonpath='{.data}'
 EOF
+
+# Apply the PodDefault that injects the secret and configmap into all KFP pipeline pods.
+# Without this, every pipeline pod crashes with KeyError on the first os.environ[] access.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+kubectl apply -f "${SCRIPT_DIR}/k8s_yamls/kubeflow/mlops-poddefault.yaml"
+echo "✓ PodDefault 'mlops-credentials' applied — all pipeline pods will receive service credentials."
