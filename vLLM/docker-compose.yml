@@ -1,0 +1,37 @@
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    container_name: vllm-server
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      # HuggingFace model cache — models are downloaded here on first run
+      - ./vllm_models:/root/.cache/huggingface
+      # Map workspace for development
+      - .:/workspace
+    environment:
+      # --- Model (edit this to switch models) ---
+      # Keep coder here so that we can easily switch between the two models for testing
+      # VLLM_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct-AWQ
+      #- VLLM_MODEL=QuantTrio/Qwen3.6-27B-AWQ-6Bit
+      - VLLM_MODEL=palmfuture/Qwen3.6-35B-A3B-GPTQ-Int4
+      # Uncomment and set if the model requires a HuggingFace token
+      # - HF_TOKEN=hf_...
+      # --- Performance tuning (RTX 5090, single user, coding) ---
+      - MAX_MODEL_LEN=49152
+      - GPU_MEMORY_UTILIZATION=0.95
+      # CUDA environment variables for GPU support
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
