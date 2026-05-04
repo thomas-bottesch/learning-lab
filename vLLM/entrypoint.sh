@@ -36,8 +36,8 @@ HOST=0.0.0.0
 PORT=11434
 
 if [ "$MODEL" = "palmfuture/Qwen3.6-35B-A3B-GPTQ-Int4" ]; then
-    GPU_MEM=0.95
-    MAX_MODEL_LEN=111072
+    GPU_MEM=0.98
+    MAX_MODEL_LEN=180072
     echo "Using custom settings for model: $MODEL"
     exec python3 -m vllm.entrypoints.openai.api_server \
         --model "$MODEL" \

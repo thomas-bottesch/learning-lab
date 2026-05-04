@@ -44,9 +44,11 @@ RUN apt-get update && apt-get install -y \
     zstd \
     && rm -rf /var/lib/apt/lists/*
 
+# Force update Ollama v1
 # ------------------------------
 # Install Ollama
 # ------------------------------
+RUN echo "Force update v1"
 RUN curl -fsSL https://ollama.com/install.sh | sh
 
 # Set Ollama environment variables

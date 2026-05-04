@@ -15,8 +15,13 @@ services:
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_ORIGINS=*
-      - OLLAMA_MODEL=qwen2.5-coder:32b-instruct-q4_K_M
-      - OLLAMA_CONTEXT_LENGTH=128536
+      - OLLAMA_MODEL=qwen3.6:27b-q4_K_M
+      - OLLAMA_CONTEXT_LENGTH=8192
+      - OLLAMA_NUM_GPU=999
+      - OLLAMA_KV_CACHE_TYPE_K=q8_0
+      - OLLAMA_KV_CACHE_TYPE_V=q4_0
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_MAX_LOADED_MODELS=1
       # CUDA environment variables for GPU support
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
