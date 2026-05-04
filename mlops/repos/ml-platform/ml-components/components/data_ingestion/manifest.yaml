@@ -1,0 +1,37 @@
+name: data-ingestion
+version: "1.0.0"
+category: ingestion
+description: |
+  Resolves the current LakeFS commit for a given repo and branch, then
+  returns the stable MinIO S3 path for that commit's dataset. The commit
+  is resolved before the data path is constructed to avoid TOCTOU races.
+  Downstream components always read from an immutable snapshot.
+
+inputs:
+  - name: lakefs_repo
+    type: String
+    description: LakeFS repository name, e.g. "mlops-data-dev".
+  - name: branch
+    type: String
+    description: LakeFS branch to read from, e.g. "main" or "experiment-1".
+
+outputs:
+  - name: dataset_path
+    type: Dataset
+    description: MinIO S3 URI pointing to the Parquet file for this commit.
+    schema: "s3://datasets/<repo>/<commit>/data.parquet"
+  - name: lakefs_commit
+    type: String
+    description: LakeFS commit hash resolved at read time. Passed forward for lineage tagging.
+    schema: "<40-char sha>"
+
+typical_upstream:
+  - pipeline-start
+typical_downstream:
+  - data-validation
+
+resource_profile:
+  cpu: "0.5"
+  memory: "512Mi"
+
+tags: [ingestion, lakefs, s3, parquet, lineage]

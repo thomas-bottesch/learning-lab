@@ -1,0 +1,14 @@
+{
+  "composition_patterns": [
+    {
+      "name": "standard-training-pipeline",
+      "description": "Full supervised learning pipeline for team tron: ingest → validate → engineer → train → evaluate.",
+      "sequence": ["data-ingestion", "data-validation", "feature-engineering", "model-training", "model-evaluation"]
+    },
+    {
+      "name": "quick-evaluation-pipeline",
+      "description": "Fast quality check: runs the full DAG with minimal epochs to validate data and model health.",
+      "sequence": ["data-ingestion", "data-validation", "feature-engineering", "model-training", "model-evaluation"]
+    }
+  ]
+}

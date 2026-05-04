@@ -2,3 +2,4 @@
 huggingface_hub[cli]
 kfp
 kfp-kubernetes
+mcp

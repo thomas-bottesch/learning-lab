@@ -1,0 +1,203 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  detect-changes:
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    outputs:
+      components: ${{ steps.detect.outputs.components }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed components
+        id: detect
+        run: |
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+          EMPTY_TREE="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            BEFORE="$EMPTY_TREE"
+          fi
+          CHANGED=$(git diff --name-only "$BEFORE" "$AFTER")
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          COMPONENTS=$(echo "$CHANGED" \
+            | { grep '^components/' || true; } \
+            | cut -d/ -f2 \
+            | { grep -v __init__.py || true; } \
+            | sort -u \
+            | jq -R . | jq -sc .)
+
+          # Ensure we always output a valid JSON array (even if empty)
+          if [ "$COMPONENTS" = "" ] || [ "$COMPONENTS" = "null" ]; then
+            COMPONENTS="[]"
+          fi
+          echo "components=$COMPONENTS" >> "$GITHUB_OUTPUT"
+          echo "Detected components to publish: $COMPONENTS"
+
+  ensure-base-image:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.components != '[]' && needs.detect-changes.outputs.components != 'null'
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build base image if missing
+        run: |
+          LOCAL_BASE="ml-components/base:latest"
+          if docker image inspect "$LOCAL_BASE" > /dev/null 2>&1; then
+            echo "Base image already exists locally, skipping build."
+            exit 0
+          fi
+          echo "Base image missing, building..."
+          docker build \
+            --platform linux/amd64 \
+            -t "$LOCAL_BASE" \
+            -f docker/Dockerfile.base \
+            .
+          echo "Base image tagged locally as $LOCAL_BASE"
+
+  publish-component:
+    needs: [detect-changes, ensure-base-image]
+    if: needs.detect-changes.outputs.components != '[]' && needs.detect-changes.outputs.components != 'null'
+    strategy:
+      matrix:
+        component: ${{ fromJson(needs.detect-changes.outputs.components) }}
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build component image locally
+        run: |
+          COMPONENT="${{ matrix.component }}"
+          uv pip install --python /opt/ml-venv/bin/python -e components/$COMPONENT
+          uv pip install --python /opt/ml-venv/bin/python docker
+          PYTHONPATH=. kfp component build components/$COMPONENT --no-push-image
+          echo "Component Docker image built locally (not pushed)"
+
+      - name: Prepare component.yaml for ZOT push
+        run: |
+          COMPONENT="${{ matrix.component }}"
+          PYTHONPATH=. python3 scripts/compile_component.py $COMPONENT
+          echo "Generated components/$COMPONENT/component.yaml"
+
+      - name: Push component spec to ZOT
+        run: |
+          VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('components/${{ matrix.component }}/manifest.yaml'))['version'])")
+          KEBAB=$(echo "${{ matrix.component }}" | tr '_' '-')
+          cd components/${{ matrix.component }}
+          oras push --plain-http 172.17.0.1:8001/ml-components/${KEBAB}-spec:${VERSION} \
+            component.yaml manifest.yaml
+          oras push --plain-http 172.17.0.1:8001/ml-components/${KEBAB}-spec:latest \
+            component.yaml manifest.yaml
+
+      - name: Create component git tag
+        run: |
+          VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('components/${{ matrix.component }}/manifest.yaml'))['version'])")
+          KEBAB=$(echo "${{ matrix.component }}" | tr '_' '-')
+          git config user.email "ci@forgejo.local"
+          git config user.name "Forgejo CI"
+          TAG="${KEBAB}/v${VERSION}"
+          git tag "$TAG" || echo "Tag $TAG already exists, skipping."
+          git push origin "$TAG" || echo "Tag push skipped."
+
+  publish-python-package:
+    needs: [detect-changes, publish-component]
+    if: needs.detect-changes.outputs.components != '[]' && needs.detect-changes.outputs.components != 'null'
+    strategy:
+      matrix:
+        component: ${{ fromJson(needs.detect-changes.outputs.components) }}
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get component package name and version
+        id: pkg
+        run: |
+          COMPONENT="${{ matrix.component }}"
+          KEBAB=$(echo "$COMPONENT" | tr '_' '-')
+          VERSION=$(python3 -c "import yaml; print(yaml.safe_load(open('components/${COMPONENT}/manifest.yaml'))['version'])")
+          PKG_NAME="ml-components-${KEBAB}"
+          echo "pkg_name=${PKG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version was bumped
+        run: |
+          CURRENT="${{ steps.pkg.outputs.version }}"
+          PYPI_API_BASE=$(echo "${{ vars.PYPI_INDEX_URL }}" | sed 's|/simple/[[:space:]]*$||')
+          PUBLISHED=$(curl -sf "${PYPI_API_BASE}/${{ steps.pkg.outputs.pkg_name }}/json" \
+            | python3 -c "
+            import sys, json
+            from packaging.version import Version
+            data = json.load(sys.stdin)
+            versions = list(data.get('releases', {}).keys())
+            print(str(max(versions, key=Version)) if versions else '0.0.0')
+            " 2>/dev/null || echo "0.0.0")
+          python3 -c "
+          from packaging.version import Version
+          c, p = Version('${{ steps.pkg.outputs.version }}'), Version('$PUBLISHED')
+          if c <= p:
+              raise SystemExit(f'FATAL: {${{ steps.pkg.outputs.pkg_name }}} version {c} <= published {p}. Version was not bumped.')
+          print(f'Publishing: {p} -> {c}')
+          "
+
+      - name: Build wheel
+        run: |
+          COMPONENT="${{ matrix.component }}"
+          python3 -m build components/$COMPONENT --outdir dist
+
+      - name: Publish to Forgejo PyPI
+        run: |
+          twine upload \
+            --repository-url http://172.17.0.1:4000/api/packages/ml-platform/pypi \
+            --username "${{ secrets.FJ_USERNAME }}" \
+            --password "${{ secrets.FJ_TOKEN }}" \
+            dist/*
+
+      - name: Create package git tag
+        run: |
+          KEBAB=$(echo "${{ matrix.component }}" | tr '_' '-')
+          VERSION="${{ steps.pkg.outputs.version }}"
+          git config user.email "ci@forgejo.local"
+          git config user.name "Forgejo CI"
+          TAG="${KEBAB}/v${VERSION}"
+          git tag "$TAG" || echo "Tag $TAG already exists, skipping."
+          git push origin "$TAG" || echo "Tag push skipped."
+
+  regenerate-catalog:
+    needs: [publish-component, publish-python-package]
+    if: ${{ always() && needs.publish-component.result == 'success' && needs.publish-python-package.result == 'success' }}
+    concurrency:
+      group: catalog-publish
+      cancel-in-progress: false
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build catalog from ZOT
+        run: python3 scripts/generate_catalog.py --registry 172.17.0.1:8001
+
+      - name: Push catalog to ZOT
+        run: |
+          oras push --plain-http 172.17.0.1:8001/ml-components/catalog:latest \
+            --disable-path-validation \
+            catalog.json:application/vnd.ml.catalog.v1+json
+          oras push --plain-http 172.17.0.1:8001/ml-components/catalog:$(date +%F) \
+            --disable-path-validation \
+            catalog.json:application/vnd.ml.catalog.v1+json

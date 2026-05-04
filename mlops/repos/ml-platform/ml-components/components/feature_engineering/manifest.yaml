@@ -1,0 +1,31 @@
+name: feature-engineering
+version: "1.0.0"
+category: feature-engineering
+description: |
+  Applies StandardScaler normalization to all numeric columns in the validated
+  dataset and writes the result as a new Parquet file to MinIO under the same
+  bucket, with "data.parquet" replaced by "features.parquet" in the key.
+  Only numeric columns are scaled; categorical columns are passed through unchanged.
+
+inputs:
+  - name: dataset_path
+    type: Dataset
+    description: Validated dataset path from data-validation.
+    schema: "s3://datasets/<repo>/<commit>/data.parquet"
+
+outputs:
+  - name: features_path
+    type: Dataset
+    description: Normalized feature set written to MinIO.
+    schema: "s3://datasets/<repo>/<commit>/features.parquet"
+
+typical_upstream:
+  - data-validation
+typical_downstream:
+  - model-training
+
+resource_profile:
+  cpu: "2"
+  memory: "8Gi"
+
+tags: [feature-engineering, normalization, sklearn, parquet]

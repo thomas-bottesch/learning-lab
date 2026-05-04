@@ -1,0 +1,38 @@
+[project]
+name = "team-tron-pipelines"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "ml-components-data-ingestion==1.0.0",
+    "ml-components-data-validation==1.0.0",
+    "ml-components-feature-engineering==1.0.0",
+    "ml-components-model-training==1.0.0",
+    "ml-components-model-evaluation==1.0.0",
+    "kfp>=2.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "python-dotenv>=1.0",
+]
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["pipelines*", "kfp_utils*", "config*"]
+
+[tool.uv.sources]
+ml-components-data-ingestion = { index = "forgejo-pypi" }
+ml-components-data-validation = { index = "forgejo-pypi" }
+ml-components-feature-engineering = { index = "forgejo-pypi" }
+ml-components-model-training = { index = "forgejo-pypi" }
+ml-components-model-evaluation = { index = "forgejo-pypi" }
+
+[[tool.uv.index]]
+name = "forgejo-pypi"
+url = "http://172.17.0.1:4000/api/packages/ml-platform/pypi/simple/"
+explicit = true

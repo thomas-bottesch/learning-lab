@@ -179,7 +179,7 @@ setup_actions_secrets() {
     
     # Set up VARIABLES (non-sensitive data: hostnames, endpoints, bucket names, namespaces, usernames)
     echo "  Setting up variables (non-sensitive data)..."
-    PYPI_INDEX_URL="http://172.17.0.1:4000/api/packages/ml-platform/pypi/simple/"
+    PYPI_INDEX_URL="http://localhost:4000/api/packages/ml-platform/pypi/simple/"
     local variables=(
         "KUBEFLOW_HOST:$KUBEFLOW_HOST"
         "KUBEFLOW_USERNAME:$KUBEFLOW_USERNAME"
@@ -188,6 +188,8 @@ setup_actions_secrets() {
         "MINIO_ENDPOINT:$MINIO_ENDPOINT"
         "LAKEFS_ENDPOINT:$LAKEFS_ENDPOINT"
         "LAKEFS_BUCKET_NAME:$LAKEFS_BUCKET_NAME"
+        "LAKEFS_REPO:mlops-data-dev"
+        "LAKEFS_BRANCH:main"
         "DVC_BUCKET_NAME:$DVC_BUCKET_NAME"
         "KUBEFLOW_NAMESPACE:$KUBEFLOW_NAMESPACE"
         "PYPI_INDEX_URL:$PYPI_INDEX_URL"
@@ -223,6 +225,8 @@ setup_actions_secrets() {
         "LAKEFS_SECRET_KEY:$LAKEFS_SECRET_KEY"
         "AWS_ACCESS_KEY_ID:$MINIO_ACCESS_KEY"
         "AWS_SECRET_ACCESS_KEY:$MINIO_SECRET_KEY"
+        "FJ_USERNAME:$FORGEJO_USER"
+        "FJ_TOKEN:$FORGEJO_PASSWORD"
     )
     
     for secret_pair in "${secrets[@]}"; do
@@ -277,7 +281,7 @@ setup_and_push_repo() {
     
     # Initialize git if needed
     if [ ! -d .git ]; then
-        git init
+        git init -b main
         git config user.name "$FORGEJO_USER"
         git config user.email "$FORGEJO_EMAIL"
         echo "✓ Git repository initialized"
@@ -309,10 +313,11 @@ setup_and_push_repo() {
     
     # Push to repository
     echo "Pushing to remote repository..."
-    if git push -u origin master 2>/dev/null || git push -u origin main 2>/dev/null; then
+    if git push -u origin main; then
         echo "✓ Pushed successfully!"
     else
-        echo "Note: Push may already be up to date or branch name differs"
+        echo "Error: Failed to push to repository." >&2
+        exit 1
     fi
     
     cd - >/dev/null

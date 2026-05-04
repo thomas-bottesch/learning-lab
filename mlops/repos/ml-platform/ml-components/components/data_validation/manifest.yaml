@@ -1,0 +1,48 @@
+name: data-validation
+version: "1.0.0"
+category: validation
+description: |
+  Validates a dataset from MinIO before feature engineering begins.
+  Checks row count, per-column null fraction, and all-zero numeric columns.
+  Raises ValueError on any failure — KFP marks the step Failed and all
+  downstream steps are skipped. On success, passes dataset_path through
+  unchanged so feature-engineering can consume it directly.
+
+inputs:
+  - name: dataset_path
+    type: Dataset
+    description: Output of data-ingestion. Parquet file on MinIO.
+    schema: "s3://datasets/<repo>/<commit>/data.parquet"
+  - name: lakefs_commit
+    type: String
+    description: LakeFS commit hash from data-ingestion. Embedded in the validation report for lineage.
+    schema: "<40-char sha>"
+  - name: min_rows
+    type: Integer
+    default: 1000
+    description: Minimum acceptable row count. Fails if the dataset has fewer rows.
+  - name: max_null_fraction
+    type: Float
+    default: 0.05
+    description: Maximum null fraction per column. Fails if any column exceeds this.
+
+outputs:
+  - name: dataset_path
+    type: Dataset
+    description: Same path as input — passed through unchanged on success.
+    schema: "s3://datasets/<repo>/<commit>/data.parquet"
+  - name: validation_report
+    type: String
+    description: JSON summary with status, row count, column list, and lakefs_commit.
+    schema: '{"status": "passed", "rows": <int>, "columns": [...], "lakefs_commit": "<sha>"}'
+
+typical_upstream:
+  - data-ingestion
+typical_downstream:
+  - feature-engineering
+
+resource_profile:
+  cpu: "1"
+  memory: "4Gi"
+
+tags: [validation, data-quality, blocking, gate]

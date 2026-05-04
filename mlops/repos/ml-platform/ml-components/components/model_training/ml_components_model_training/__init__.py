@@ -1,0 +1,1 @@
+from ml_components_model_training.component import model_training

@@ -1,0 +1,13 @@
+{
+	"mcpServers": {
+		"forgejo-actions": {
+			"type": "stdio",
+			"command": "python3",
+			"args": [
+				"-m",
+				"mcp_servers.forgejo"
+			],
+			"cwd": "/workspace/git_repo/mlops"
+		}
+	}
+}

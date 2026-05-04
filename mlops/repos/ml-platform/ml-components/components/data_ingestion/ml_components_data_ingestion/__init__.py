@@ -1,0 +1,1 @@
+from ml_components_data_ingestion.component import data_ingestion

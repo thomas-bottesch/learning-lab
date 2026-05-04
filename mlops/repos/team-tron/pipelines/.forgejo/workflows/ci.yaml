@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  compile-and-test:
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies from lock file
+        # --extra dev installs pytest (required by the step below).
+        # The Forgejo PyPI index is already configured in pyproject.toml as an explicit
+        # index (explicit = true), so uv uses it only for ml-components and uses PyPI
+        # for everything else. Do NOT pass --index-url here — that would replace PyPI
+        # entirely with the Forgejo registry and break resolution of kfp, pandas, etc.
+        run: uv sync --frozen --extra dev
+
+      - name: Compile all pipelines
+        run: |
+          uv run python -c "
+          import tempfile
+          from kfp import compiler
+          from pipelines.training_pipeline import training_pipeline
+          from pipelines.retraining_pipeline import retraining_pipeline
+          from pipelines.evaluation_pipeline import evaluation_pipeline
+          for name, pipeline in [
+              ('training', training_pipeline),
+              ('retraining', retraining_pipeline),
+              ('evaluation', evaluation_pipeline),
+          ]:
+              with tempfile.NamedTemporaryFile(suffix='.yaml') as f:
+                  compiler.Compiler().compile(pipeline, f.name)
+              print(f'OK  {name}_pipeline compiled')
+          "
+
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short

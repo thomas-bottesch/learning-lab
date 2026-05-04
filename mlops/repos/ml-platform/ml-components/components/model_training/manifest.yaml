@@ -1,0 +1,47 @@
+name: model-training
+version: "1.0.0"
+category: training
+description: |
+  Trains a LogisticRegression classifier on the normalized feature set from
+  feature-engineering. Logs parameters and metrics to MLflow and saves the
+  serialized model to the MinIO "models" bucket. The run ID ties this
+  artifact back to its MLflow experiment record for full lineage.
+
+inputs:
+  - name: features_path
+    type: Dataset
+    description: Normalized feature Parquet from feature-engineering.
+    schema: "s3://datasets/<repo>/<commit>/features.parquet"
+  - name: mlflow_run_name
+    type: String
+    default: "tron-training"
+    description: Display name for the MLflow run.
+  - name: epochs
+    type: Integer
+    default: 10
+    description: Training epochs (currently passed to MLflow params for logging; LogisticRegression uses max_iter).
+  - name: max_iter
+    type: Integer
+    default: 200
+    description: Maximum iterations for LogisticRegression convergence.
+
+outputs:
+  - name: model_artifact
+    type: Model
+    description: MinIO S3 URI of the serialized model pickle.
+    schema: "s3://models/tron/<run_id>/model.pkl"
+  - name: mlflow_run_id
+    type: String
+    description: MLflow run ID. Used by model-evaluation to link metrics to this training run.
+    schema: "<uuid>"
+
+typical_upstream:
+  - feature-engineering
+typical_downstream:
+  - model-evaluation
+
+resource_profile:
+  cpu: "2"
+  memory: "8Gi"
+
+tags: [training, sklearn, mlflow, classification]

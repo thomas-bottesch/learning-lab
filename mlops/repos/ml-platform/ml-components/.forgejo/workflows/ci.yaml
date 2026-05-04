@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  detect-changes:
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    outputs:
+      components: ${{ steps.detect.outputs.components }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed components
+        id: detect
+        run: |
+          BASE="${{ github.base_ref || 'main' }}"
+          CHANGED=$(git diff --name-only "$BASE" HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          COMPONENTS=$(echo "$CHANGED" \
+            | { grep '^components/' || true; } \
+            | cut -d/ -f2 \
+            | { grep -v __init__.py || true; } \
+            | sort -u \
+            | jq -R . | jq -sc .)
+
+          # Ensure we always output a valid JSON array (even if empty)
+          if [ "$COMPONENTS" = "" ] || [ "$COMPONENTS" = "null" ]; then
+            COMPONENTS="[]"
+          fi
+          echo "components=$COMPONENTS" >> "$GITHUB_OUTPUT"
+          echo "Detected components to test: $COMPONENTS"
+
+  test:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.components != '[]' && needs.detect-changes.outputs.components != 'null'
+    strategy:
+      matrix:
+        component: ${{ fromJson(needs.detect-changes.outputs.components) }}
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dev dependencies and test
+        run: |
+          COMPONENT="${{ matrix.component }}"
+          echo "Testing component: ${COMPONENT}"
+          (cd "components/${COMPONENT}" && uv sync --frozen --extra dev && uv run pytest tests/ -v --tb=short)
+
+  validate-schemas:
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install validation dependencies
+        run: uv pip install pyyaml jsonschema
+
+      - name: Validate manifest schemas
+        run: |
+          python3 -c "
+          import json, yaml, jsonschema, pathlib, sys
+          schema = json.loads(pathlib.Path('schemas/manifest-schema.json').read_text())
+          failed = []
+          for manifest in sorted(pathlib.Path('components').glob('*/manifest.yaml')):
+              try:
+                  data = yaml.safe_load(manifest.read_text())
+                  jsonschema.validate(data, schema)
+                  print(f'OK  {manifest}')
+              except jsonschema.ValidationError as e:
+                  print(f'FAIL {manifest}: {e.message}')
+                  failed.append(str(manifest))
+          if failed:
+              sys.exit(1)
+          "

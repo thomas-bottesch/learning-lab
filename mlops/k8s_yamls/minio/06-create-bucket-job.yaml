@@ -37,3 +37,5 @@ spec:
                 mc version enable local/models || true
                 mc mb -p local/zot-registry || true
                 mc version enable local/zot-registry || true
+                mc mb -p local/lakefs || true
+                mc version enable local/lakefs || true

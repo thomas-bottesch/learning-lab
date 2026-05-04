@@ -1,0 +1,44 @@
+name: model-evaluation
+version: "1.0.0"
+category: evaluation
+description: |
+  Loads the trained model artifact from MinIO and the feature set from
+  feature-engineering. Computes held-out accuracy using the same 80/20
+  split used in training (random_state=42). Raises if accuracy is below
+  min_accuracy — the pipeline is aborted and the model is never registered.
+  On success, returns a JSON evaluation report and the accuracy value.
+
+inputs:
+  - name: model_artifact
+    type: Model
+    description: MinIO S3 URI of the pickled model from model-training.
+    schema: "s3://models/tron/<run_id>/model.pkl"
+  - name: features_path
+    type: Dataset
+    description: Normalized feature Parquet from feature-engineering.
+    schema: "s3://datasets/<repo>/<commit>/features.parquet"
+  - name: min_accuracy
+    type: Float
+    default: 0.80
+    description: Minimum acceptable accuracy. Raises and aborts pipeline if not met.
+
+outputs:
+  - name: evaluation_report
+    type: String
+    description: JSON report with status, accuracy, threshold, and model artifact URI.
+    schema: '{"status": "passed"|"failed", "accuracy": <float>, "min_accuracy": <float>, "model_artifact": "<uri>"}'
+  - name: accuracy
+    type: Float
+    description: Held-out accuracy score (0.0–1.0).
+    schema: "<float in [0.0, 1.0]>"
+
+typical_upstream:
+  - model-training
+typical_downstream:
+  - model-registry
+
+resource_profile:
+  cpu: "1"
+  memory: "4Gi"
+
+tags: [evaluation, metrics, accuracy, gate, sklearn]

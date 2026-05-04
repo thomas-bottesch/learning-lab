@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "forgejo-actions": {
+      "command": "python3",
+      "args": [
+        "-m",
+        "mcp_servers.forgejo"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}

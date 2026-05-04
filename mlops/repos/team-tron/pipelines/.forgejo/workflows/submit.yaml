@@ -1,0 +1,63 @@
+name: Submit Pipeline
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  submit-training-pipeline:
+    runs-on: linux
+    container:
+      image: forgejo-runner-python3.12:latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies from lock file
+        run: uv sync --frozen
+
+      - name: Seed initial data
+        env:
+          LAKEFS_ENDPOINT: http://172.17.0.1:8000
+          LAKEFS_ACCESS_KEY: ${{ secrets.LAKEFS_ACCESS_KEY }}
+          LAKEFS_SECRET_KEY: ${{ secrets.LAKEFS_SECRET_KEY }}
+          MINIO_ENDPOINT: http://172.17.0.1:9000
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          LAKEFS_REPO: ${{ vars.LAKEFS_REPO }}
+          BRANCH: ${{ vars.LAKEFS_BRANCH }}
+        run: uv run python scripts/seed_data.py
+
+      - name: Compile training pipeline
+        run: |
+          uv run python -c "
+          from kfp import compiler
+          from pipelines.training_pipeline import training_pipeline
+          compiler.Compiler().compile(training_pipeline, '/tmp/training_pipeline.yaml')
+          print('Pipeline compiled.')
+          "
+
+      - name: Authenticate and submit to Kubeflow
+        env:
+          KUBEFLOW_HOST: ${{ vars.KUBEFLOW_HOST }}
+          KUBEFLOW_NAMESPACE: ${{ vars.KUBEFLOW_NAMESPACE }}
+          KUBEFLOW_USERNAME: ${{ vars.DEX_USERNAME }}
+          KUBEFLOW_PASSWORD: ${{ secrets.DEX_PASSWORD }}
+        run: |
+          uv run python - <<'PYEOF'
+          import os
+          from kfp_utils.auth import get_kfp_client
+
+          client = get_kfp_client(
+              host=os.environ["KUBEFLOW_HOST"],
+              namespace=os.environ["KUBEFLOW_NAMESPACE"],
+              username=os.environ["KUBEFLOW_USERNAME"],
+              password=os.environ["KUBEFLOW_PASSWORD"],
+          )
+          run = client.create_run_from_pipeline_package(
+              pipeline_file="/tmp/training_pipeline.yaml",
+              arguments={},
+              run_name="tron-training-ci",
+              experiment_name="tron-ci-runs",
+          )
+          print(f"Pipeline run submitted: {run.run_id}")
+          PYEOF

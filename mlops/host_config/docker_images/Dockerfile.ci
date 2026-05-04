@@ -54,22 +54,21 @@ RUN curl -Lo /usr/local/bin/yq \
 RUN ln -sf /usr/bin/python3.12 /usr/bin/python && \
     ln -sf /usr/bin/python3.12 /usr/bin/python3
 
-# Pre-install Python packages required by CI workflows into the system Python.
-# Installing here rather than per-job avoids repeated network round-trips on every run.
-#
-#   kfp          — `kfp component build` in publish.yaml (generates Dockerfile + component.yaml)
-#   requests     — generate_catalog.py (ZOT GraphQL search API)
-#   pyyaml       — generate_catalog.py (yaml.safe_load on pulled manifest.yaml)
-#   packaging    — version comparisons in ci.yaml and publish.yaml version-bump checks
-#   build        — `python -m build` to produce the ml-components wheel in publish.yaml
-#   twine        — `twine upload` to push the wheel to the Forgejo PyPI registry
-RUN uv pip install --system --python /usr/bin/python3.12 \
-    kfp \
-    requests \
-    pyyaml \
-    packaging \
-    build \
-    twine
+# Create a venv owned by runner so CI jobs can install project packages into it
+# without needing root. All heavyweight CI deps are pre-baked here to avoid
+# per-job network downloads; runner can later do `uv pip install -e .` into it.
+RUN uv venv /opt/ml-venv --python /usr/bin/python3.12 && \
+    uv pip install --python /opt/ml-venv/bin/python \
+        kfp \
+        requests \
+        pytest \
+        pyyaml \
+        packaging \
+        build \
+        twine && \
+    chown -R runner:runner /opt/ml-venv
+
+ENV PATH="/opt/ml-venv/bin:$PATH"
 
 # Switch back to runner user
 USER runner

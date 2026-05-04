@@ -1,0 +1,8 @@
+lakefs_repo: mlops-data-prod
+branch: main
+model_name: tron-classifier
+min_rows: 10000
+max_null_fraction: 0.02
+epochs: 20
+max_iter: 500
+min_accuracy: 0.85
