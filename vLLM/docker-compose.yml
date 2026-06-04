@@ -6,7 +6,8 @@ services:
     container_name: vllm-server
     restart: unless-stopped
     ports:
-      - "11434:11434"
+      - "11434:11434" # vLLM OpenAI-compatible API
+      - "8080:8080" # Open WebUI
     volumes:
       # HuggingFace model cache — models are downloaded here on first run
       - ./vllm_models:/root/.cache/huggingface
@@ -32,6 +33,6 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     stdin_open: true
     tty: true

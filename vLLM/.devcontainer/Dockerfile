@@ -26,6 +26,9 @@ RUN apt-get update && apt-get install -y sudo curl \
     && chmod 0440 /etc/sudoers.d/${MY_USERNAME} \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Open WebUI
+RUN pip install open-webui
+
 COPY --chown=${MY_USERNAME}:${MY_GROUPNAME} entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
