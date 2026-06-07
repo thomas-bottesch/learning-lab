@@ -4,6 +4,9 @@ set -e
 
 echo "=== vLLM + Open WebUI Container Entrypoint ==="
 
+# print vllm version
+echo "vLLM version: $(python3 -c 'import vllm; print(getattr(vllm, "__version__", "unknown"))')"
+
 MODEL="${VLLM_MODEL:?VLLM_MODEL environment variable must be set}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-49152}"
 GPU_MEM="${GPU_MEMORY_UTILIZATION:-0.95}"
@@ -21,9 +24,27 @@ case "$MODEL" in
             --tool-call-parser qwen3_coder
             --quantization gptq_marlin
             --max-num-batched-tokens 4096
-            --gpu-memory-utilization "$GPU_MEM"
             --dtype auto
             --trust-remote-code
+        )
+        ;;
+    nvidia/Qwen3.6-35B-A3B-NVFP4)
+        GPU_MEM=0.98
+        MAX_MODEL_LEN=140000
+        echo "Using custom settings for model: $MODEL (NVFP4 quantized with modelopt)"
+        VLLM_EXTRA_ARGS=(
+            --served-model-name nvidia/Qwen3.6-35B-A3B-NVFP4
+            --enable-auto-tool-choice
+            --tool-call-parser qwen3_coder
+            --quantization modelopt
+            --dtype auto
+            --trust-remote-code
+            --moe-backend marlin
+            --attention-backend flashinfer
+            --max-num-batched-tokens 8192
+            --max-num-seqs 4
+            --async-scheduling
+            --speculative-config '{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}'
         )
         ;;
     *)
@@ -69,7 +90,7 @@ VLLM_PID=$!
 
 # Wait for vLLM to be ready
 echo "Waiting for vLLM server to start..."
-max_attempts=120
+max_attempts=240
 attempt=1
 while ! curl -sf http://localhost:11434/v1/models >/dev/null 2>&1; do
     if [ $attempt -ge $max_attempts ]; then

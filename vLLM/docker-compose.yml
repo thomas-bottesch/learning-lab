@@ -19,6 +19,7 @@ services:
       # VLLM_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct-AWQ
       #- VLLM_MODEL=QuantTrio/Qwen3.6-27B-AWQ-6Bit
       - VLLM_MODEL=palmfuture/Qwen3.6-35B-A3B-GPTQ-Int4
+      #- VLLM_MODEL=nvidia/Qwen3.6-35B-A3B-NVFP4
       # Uncomment and set if the model requires a HuggingFace token
       # - HF_TOKEN=hf_...
       # --- Performance tuning (RTX 5090, single user, coding) ---
