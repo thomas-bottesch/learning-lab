@@ -1,4 +1,4 @@
-FROM docker.io/vllm/vllm-openai:latest@sha256:04563c302537a91aa49ebdfbceda96111c5712275999b7e8804fa598f0b5641d
+FROM docker.io/vllm/vllm-openai:nightly@sha256:00cc19f41e3427bbcf43941afcb3a8b5ae82c6b48bbab7922d885f83bd4d2dad
 
 ENV MY_USERNAME=vscode \
     MY_GROUPNAME=vscode \
