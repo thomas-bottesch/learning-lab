@@ -75,7 +75,7 @@ VLLM_ARGS=(
     --dtype bfloat16
     --gpu-memory-utilization "$GPU_MEM"
     --max-model-len "$MAX_MODEL_LEN"
-    --max-num-seqs 1
+    --max-num-seqs 3
     --enable-prefix-caching
     --enable-chunked-prefill
     --kv-cache-dtype fp8
