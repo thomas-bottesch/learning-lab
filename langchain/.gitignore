@@ -1,0 +1,3 @@
+/ollama_models/*
+!/ollama_models/README.md
+#/notebooks/*

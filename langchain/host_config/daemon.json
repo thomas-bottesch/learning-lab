@@ -1,0 +1,17 @@
+{
+    "data-root": "/mnt/data/docker_cache",
+    "runtimes": {
+        "nvidia": {
+            "args": [],
+            "path": "nvidia-container-runtime"
+        }
+    },
+    "storage-driver": "overlay2",
+    "bip": "172.17.0.1/16",
+    "fixed-cidr": "172.17.0.1/16",
+    "mtu": 1400,
+    "log-driver": "json-file",
+    "log-opts": {
+        "max-size": "100m"
+    }
+}
