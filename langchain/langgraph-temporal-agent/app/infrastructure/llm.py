@@ -9,8 +9,6 @@ In production, replace the mock implementations with real APIs
 (e.g. Tavily for search, OpenAI/Anthropic for LLM calls).
 """
 
-from __future__ import annotations
-
 
 async def search(question: str) -> list[dict[str, str]]:
     """

@@ -18,8 +18,6 @@ by ID:
             Object Storage (S3 / GCS / Azure Blob)
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Any
 

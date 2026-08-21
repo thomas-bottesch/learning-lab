@@ -9,26 +9,9 @@ This module MUST NOT import LangChain, LangGraph, or any external I/O code.
 All graph/infrastructure imports are lazy (inside the function body).
 """
 
-from __future__ import annotations
-
-from datetime import timedelta
-
 from temporalio import activity
-from temporalio.common import RetryPolicy
 
 from app.domain.models import VerifiedResearch, Proposal
-
-# ---------------------------------------------------------------------------
-# Retry policy
-# ---------------------------------------------------------------------------
-
-_PROPOSAL_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=2),
-    backoff_coefficient=2.0,
-    maximum_interval=timedelta(minutes=2),
-    maximum_attempts=3,
-)
-
 
 # ---------------------------------------------------------------------------
 # Activity definition

@@ -13,8 +13,6 @@ Multiple instances of this worker can run simultaneously against the same
 task queue.  Temporal will distribute tasks across them.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import os

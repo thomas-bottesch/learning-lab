@@ -10,8 +10,6 @@ This module MUST NOT import LangChain, LangGraph, or any external I/O code.
 It only depends on domain.models and temporalio.
 """
 
-from __future__ import annotations
-
 from temporalio import activity
 
 from app.domain.models import ExecutionResult, NotificationResult

@@ -4,8 +4,6 @@ LangGraph graph for the verification phase.
 This graph verifies the credibility of sources returned by the research phase.
 """
 
-from __future__ import annotations
-
 import typing
 
 from langgraph.graph import END, START, StateGraph

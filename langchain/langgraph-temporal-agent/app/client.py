@@ -19,8 +19,6 @@ Usage:
     python -m app.client reject research-company-123
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import os

@@ -16,26 +16,9 @@ import time, so the import-time dependency graph is:
     (at runtime) → graphs → infrastructure.llm ✅ (only when invoked)
 """
 
-from __future__ import annotations
-
-from datetime import timedelta
-
 from temporalio import activity
-from temporalio.common import RetryPolicy
 
 from app.domain.models import ResearchRequest, ResearchResult
-
-# ---------------------------------------------------------------------------
-# Retry policy
-# ---------------------------------------------------------------------------
-
-_RESEARCH_RETRY = RetryPolicy(
-    initial_interval=timedelta(seconds=2),
-    backoff_coefficient=2.0,
-    maximum_interval=timedelta(minutes=2),
-    maximum_attempts=5,
-)
-
 
 # ---------------------------------------------------------------------------
 # Activity definition

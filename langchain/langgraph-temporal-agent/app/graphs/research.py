@@ -6,8 +6,6 @@ It imports from `infrastructure.llm` for external I/O, which is fine
 because graphs run inside Activities (not in the Workflow sandbox).
 """
 
-from __future__ import annotations
-
 import typing
 
 from langgraph.graph import END, START, StateGraph

@@ -4,8 +4,6 @@ LangGraph graph for the proposal generation phase.
 This graph generates a research proposal from verified sources.
 """
 
-from __future__ import annotations
-
 import typing
 
 from langgraph.graph import END, START, StateGraph
