@@ -39,6 +39,7 @@ from app.domain.models import (
     Proposal,
     ExecutionResult,
     NotificationResult,
+    Source,
 )
 
 # ===================================================================
@@ -77,8 +78,18 @@ async def research(request: ResearchRequest) -> ResearchResult:
             "Finding 2: PostgreSQL 17 has strong performance.",
         ],
         sources=[
-            "CockroachDB vs PostgreSQL Comparison",
-            "PostgreSQL 17 Release Notes",
+            Source(
+                id="src-1",
+                url="https://example.com/cockroach-postgres-comparison",
+                title="CockroachDB vs PostgreSQL Comparison",
+                snippet="CockroachDB offers horizontal scalability.",
+            ),
+            Source(
+                id="src-2",
+                url="https://example.com/postgres-17",
+                title="PostgreSQL 17 Release Notes",
+                snippet="PostgreSQL 17 brings performance improvements.",
+            ),
         ],
     )
 
@@ -88,14 +99,18 @@ async def verify_sources(research_result: ResearchResult) -> VerifiedResearch:
     """Mock verify_sources activity for testing."""
     global _test_state
     _test_state["verify_attempts"] += 1
+    verified = [
+        s
+        for s in research_result.sources
+        if s.title == "CockroachDB vs PostgreSQL Comparison"
+    ]
+    rejected = [
+        s for s in research_result.sources if s.title == "PostgreSQL 17 Release Notes"
+    ]
     return VerifiedResearch(
         question=research_result.question,
-        verified_sources=[
-            "CockroachDB vs PostgreSQL Comparison",
-        ],
-        rejected_sources=[
-            "PostgreSQL 17 Release Notes",
-        ],
+        verified_sources=verified,
+        rejected_sources=rejected,
     )
 
 

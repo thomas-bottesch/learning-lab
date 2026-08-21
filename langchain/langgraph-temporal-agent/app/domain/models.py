@@ -19,9 +19,39 @@ by ID:
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+# ---------------------------------------------------------------------------
+# Source model — rich source representation
+# ---------------------------------------------------------------------------
+
+
+class Source(BaseModel):
+    """A single source retrieved during research."""
+
+    id: str = Field(description="Unique identifier for this source.")
+    url: str = Field(description="URL of the source.")
+    title: str = Field(description="Title of the source.")
+    snippet: str = Field(
+        default="",
+        description="Excerpt or summary of the source content.",
+    )
+    publisher: str = Field(
+        default="",
+        description="Publisher or author of the source.",
+    )
+    retrieved_at: datetime | None = Field(
+        default=None,
+        description="Timestamp when the source was retrieved.",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional source-specific metadata.",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Research Request / Result
@@ -49,8 +79,8 @@ class ResearchResult(BaseModel):
     findings: list[str] = Field(
         description="Summarised findings from the research.",
     )
-    sources: list[str] = Field(
-        description="List of source references (URLs, document titles, etc.).",
+    sources: list[Source] = Field(
+        description="List of source objects with metadata.",
     )
 
 
@@ -63,10 +93,10 @@ class VerifiedResearch(BaseModel):
     """Output of the verification phase."""
 
     question: str
-    verified_sources: list[str] = Field(
+    verified_sources: list[Source] = Field(
         description="Sources that passed verification.",
     )
-    rejected_sources: list[str] = Field(
+    rejected_sources: list[Source] = Field(
         description="Sources that were rejected during verification.",
     )
 
@@ -133,7 +163,7 @@ class ResearchGraphOutput:
     """Output from the research LangGraph."""
 
     findings: list[str]
-    sources: list[str]
+    sources: list[Source]
 
 
 @dataclass
@@ -142,15 +172,15 @@ class VerificationGraphInput:
 
     question: str
     findings: list[str]
-    sources: list[str]
+    sources: list[Source]
 
 
 @dataclass
 class VerificationGraphOutput:
     """Output from the verification LangGraph."""
 
-    verified_sources: list[str]
-    rejected_sources: list[str]
+    verified_sources: list[Source]
+    rejected_sources: list[Source]
 
 
 @dataclass
@@ -158,8 +188,8 @@ class ProposalGraphInput:
     """Input passed to the proposal LangGraph."""
 
     question: str
-    verified_sources: list[str]
-    rejected_sources: list[str]
+    verified_sources: list[Source]
+    rejected_sources: list[Source]
 
 
 @dataclass

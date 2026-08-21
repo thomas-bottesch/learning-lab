@@ -14,6 +14,7 @@ from app.infrastructure.llm import (
     llm_summarize as mock_llm_summarize,
     search as mock_search,
 )
+from app.domain.models import Source
 
 # ---------------------------------------------------------------------------
 # Typed state for the research graph
@@ -25,7 +26,8 @@ class ResearchState(typing.TypedDict, total=False):
 
     question: str
     findings: list[str]
-    sources: list[str]
+    sources: list[Source]
+    raw_results: list[dict[str, str]]
 
 
 # ---------------------------------------------------------------------------
@@ -35,17 +37,31 @@ class ResearchState(typing.TypedDict, total=False):
 
 async def search(state: ResearchState) -> dict:
     """Perform a (mock) web search and store results."""
+    from datetime import datetime, timezone
+
     question = state.get("question", "")
-    sources = await mock_search(question)
-    return {"findings": [], "sources": [s["title"] for s in sources]}
+    raw_results = await mock_search(question)
+    return {
+        "raw_results": raw_results,
+        "sources": [
+            Source(
+                id=f"src-{i}",
+                url=r.get("url", ""),
+                title=r.get("title", ""),
+                snippet=r.get("snippet", ""),
+                retrieved_at=datetime.now(timezone.utc),
+            )
+            for i, r in enumerate(raw_results)
+        ],
+    }
 
 
 async def summarize(state: ResearchState) -> dict:
     """Summarise findings using a (mock) LLM."""
     question = state.get("question", "")
-    sources = await mock_search(question)
-    findings = await mock_llm_summarize(question, sources)
-    return {"findings": findings, "sources": [s["title"] for s in sources]}
+    raw_results = state.get("raw_results", [])
+    findings = await mock_llm_summarize(question, raw_results)
+    return {"findings": findings}
 
 
 # ---------------------------------------------------------------------------

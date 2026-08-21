@@ -8,6 +8,7 @@ import typing
 
 from langgraph.graph import END, START, StateGraph
 
+from app.domain.models import Source
 from app.infrastructure.llm import llm_generate_proposal as mock_llm_generate_proposal
 
 # ---------------------------------------------------------------------------
@@ -19,8 +20,8 @@ class ProposalState(typing.TypedDict, total=False):
     """State used by the proposal graph."""
 
     question: str
-    verified_sources: list[str]
-    rejected_sources: list[str]
+    verified_sources: list[Source]
+    rejected_sources: list[Source]
     title: str
     summary: str
     proposed_action: str
@@ -33,10 +34,14 @@ class ProposalState(typing.TypedDict, total=False):
 
 async def generate_proposal_node(state: ProposalState) -> dict:
     """Generate a proposal using a (mock) LLM."""
+    verified_sources = state.get("verified_sources", [])
+    rejected_sources = state.get("rejected_sources", [])
+    verified_titles = [s.title for s in verified_sources]
+    rejected_titles = [s.title for s in rejected_sources]
     return await mock_llm_generate_proposal(
         state.get("question", ""),
-        state.get("verified_sources", []),
-        state.get("rejected_sources", []),
+        verified_titles,
+        rejected_titles,
     )
 
 

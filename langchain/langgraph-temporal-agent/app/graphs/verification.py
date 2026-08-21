@@ -8,7 +8,8 @@ import typing
 
 from langgraph.graph import END, START, StateGraph
 
-from app.infrastructure.llm import llm_verify as mock_llm_verify, search as mock_search
+from app.domain.models import Source
+from app.infrastructure.llm import llm_verify as mock_llm_verify
 
 # ---------------------------------------------------------------------------
 # Typed state for the verification graph
@@ -20,9 +21,9 @@ class VerificationState(typing.TypedDict, total=False):
 
     question: str
     findings: list[str]
-    sources: list[str]
-    verified_sources: list[str]
-    rejected_sources: list[str]
+    sources: list[Source]
+    verified_sources: list[Source]
+    rejected_sources: list[Source]
 
 
 # ---------------------------------------------------------------------------
@@ -32,13 +33,60 @@ class VerificationState(typing.TypedDict, total=False):
 
 async def verify_sources_node(state: VerificationState) -> dict:
     """Verify the credibility of sources using a (mock) LLM."""
-    question = state.get("question", "")
-    sources = await mock_search(question)
-    verified, rejected = await mock_llm_verify(sources)
-    return {
-        "verified_sources": verified,
-        "rejected_sources": rejected,
-    }
+    raw_sources = state.get("sources", [])
+    # Accept both string URLs and Source objects
+    if raw_sources and isinstance(raw_sources[0], str):
+        # String input (e.g. from tests): convert to dict format
+        source_dicts = [{"url": s, "title": s, "snippet": ""} for s in raw_sources]
+        verified_titles, rejected_titles = await mock_llm_verify(source_dicts)
+        verified = []
+        rejected = []
+        for s in raw_sources:
+            if s in verified_titles:
+                verified.append(s)
+            else:
+                rejected.append(s)
+        return {
+            "verified_sources": verified,
+            "rejected_sources": rejected,
+        }
+    else:
+        # Source objects: verify using title matching
+        sources = raw_sources  # type: list[Source]
+        source_dicts = [
+            {"url": s.url, "title": s.title, "snippet": s.snippet} for s in sources
+        ]
+        verified_titles, rejected_titles = await mock_llm_verify(source_dicts)
+        verified = [
+            Source(
+                id=s.id,
+                url=s.url,
+                title=s.title,
+                snippet=s.snippet,
+                publisher=s.publisher,
+                retrieved_at=s.retrieved_at,
+                metadata=s.metadata,
+            )
+            for s in sources
+            if s.title in verified_titles
+        ]
+        rejected = [
+            Source(
+                id=s.id,
+                url=s.url,
+                title=s.title,
+                snippet=s.snippet,
+                publisher=s.publisher,
+                retrieved_at=s.retrieved_at,
+                metadata=s.metadata,
+            )
+            for s in sources
+            if s.title in rejected_titles
+        ]
+        return {
+            "verified_sources": verified,
+            "rejected_sources": rejected,
+        }
 
 
 # ---------------------------------------------------------------------------

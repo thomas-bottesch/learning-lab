@@ -58,7 +58,9 @@ class TestResearchGraph:
     @pytest.mark.asyncio
     async def test_sources_are_strings(self, research_graph):
         result = await research_graph.ainvoke({"question": "test question"})
-        assert all(isinstance(s, str) for s in result["sources"])
+        # Sources are now Source objects with url/title properties
+        assert all(hasattr(s, "url") for s in result["sources"])
+        assert all(hasattr(s, "title") for s in result["sources"])
 
 
 # ---------------------------------------------------------------------------

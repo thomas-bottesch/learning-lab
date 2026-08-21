@@ -226,13 +226,27 @@ class ResearchWorkflow:
         workflow.logger.info("Workflow approved — proceeding to execution.")
 
         # ---- Phase 5: Execute action ----
+        #
+        # Retry policy: short retries for transient failures, but no
+        # infinite retry loop.  Permanent failures (invalid request,
+        # auth failure, business rule violation) are raised with
+        # non_retryable=True inside the Activity and will fail immediately.
         execution_result: ExecutionResult = await workflow.execute_activity(
             execute_action,
             args=(workflow.info().workflow_id, proposal.proposed_action),
             start_to_close_timeout=timedelta(minutes=2),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=1),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(seconds=10),
+                maximum_attempts=3,
+            ),
         )
 
         # ---- Phase 6: Notify user ----
+        #
+        # Notification Activity uses internal deduplication keys.
+        # A small retry budget protects against transient delivery failures.
         await workflow.execute_activity(
             notify_user,
             args=(
@@ -243,6 +257,12 @@ class ResearchWorkflow:
                 ),
             ),
             start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=1),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(seconds=5),
+                maximum_attempts=2,
+            ),
         )
 
         workflow.logger.info(

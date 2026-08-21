@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import os
 import sys
+import uuid
 
 from temporalio.client import Client as TemporalClient
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -51,7 +52,7 @@ async def cmd_start(args: argparse.Namespace) -> None:
     handle = await client.execute_workflow(
         ResearchWorkflow.run,
         request,
-        id=f"research-{hash(args.question) & 0xFFFFFFFF:08x}",
+        id=f"research-{uuid.uuid4().hex}",
         task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "research-agent"),
     )
 
