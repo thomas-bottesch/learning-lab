@@ -22,16 +22,8 @@ import os
 from temporalio.client import Client as TemporalClient
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
-from temporalio.worker._workflow_instance import UnsandboxedWorkflowRunner
 
-from app.activities import (
-    execute_action,
-    generate_proposal,
-    notify_user,
-    research,
-    verify_sources,
-)
-from app.workflow import ResearchWorkflow
+from app.workflows import ResearchWorkflow
 
 
 async def build_client() -> TemporalClient:
@@ -64,16 +56,19 @@ async def run_worker() -> None:
 
     client = await build_client()
 
-    # Use UnsandboxedWorkflowRunner because the workflow module imports
-    # activity functions at module level, which causes the sandbox to
-    # validate all transitive imports (langchain -> requests -> http.client).
-    # The workflow code itself is deterministic and performs no I/O, so
-    # unsandboxed execution is safe.
+    # The workflow references activities by string name (not by import),
+    # so it never drags LangChain/LangGraph into the sandbox.
+    # Activities are registered individually so Temporal can resolve
+    # them by the fully-qualified names used in the workflow.
+    from app.activities.research import research
+    from app.activities.verification import verify_sources
+    from app.activities.proposal import generate_proposal
+    from app.activities.side_effects import execute_action, notify_user
+
     worker = Worker(
         client,
         task_queue=task_queue,
         workflows=[ResearchWorkflow],
-        workflow_runner=UnsandboxedWorkflowRunner(),
         activities=[
             research,
             verify_sources,

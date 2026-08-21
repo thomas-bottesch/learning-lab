@@ -1,0 +1,2456 @@
+]633;E;printf '%s\\n' '===== PROJECT TREE =====';07dc3fab-9beb-4472-b503-cdd4eba10d35]633;C===== PROJECT TREE =====
+./app/activities/__init__.py
+./app/activities/proposal.py
+./app/activities/__pycache__/__init__.cpython-314.pyc
+./app/activities/__pycache__/proposal.cpython-314.pyc
+./app/activities/__pycache__/research.cpython-314.pyc
+./app/activities/__pycache__/side_effects.cpython-314.pyc
+./app/activities/__pycache__/verification.cpython-314.pyc
+./app/activities/research.py
+./app/activities/side_effects.py
+./app/activities/verification.py
+./app/client.py
+./app/domain/models.py
+./app/graphs/__init__.py
+./app/graphs/proposal.py
+./app/graphs/research.py
+./app/graphs/verification.py
+./app/infrastructure/__init__.py
+./app/infrastructure/llm.py
+./app/infrastructure/__pycache__/__init__.cpython-314.pyc
+./app/infrastructure/__pycache__/llm.cpython-314.pyc
+./app/__init__.py
+./app/worker.py
+./app/workflows/__init__.py
+./app/workflows/research.py
+./.env.example
+./pyproject.toml
+./README.md
+./tests/__pycache__/test_graphs.cpython-314-pytest-9.1.1.pyc
+./tests/__pycache__/test_workflow.cpython-314-pytest-9.1.1.pyc
+./tests/test_graphs.py
+./tests/test_workflow.py
+
+
+===== FILE CONTENTS =====
+
+
+===== FILE: ./app/worker.py =====
+
+"""
+Temporal Worker: research-agent
+
+Reads Temporal configuration from environment variables, connects to the
+existing Temporal Server, registers the ResearchWorkflow and all Activities,
+and listens on the configured task queue indefinitely.
+
+Usage:
+
+    python -m app.worker
+
+Multiple instances of this worker can run simultaneously against the same
+task queue.  Temporal will distribute tasks across them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+
+from temporalio.client import Client as TemporalClient
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.worker import Worker
+
+from app.workflows import ResearchWorkflow
+
+
+async def build_client() -> TemporalClient:
+    """
+    Build a Temporal client from environment variables.
+
+    Required env vars:
+        TEMPORAL_ADDRESS   — e.g. ``temporal.example.internal:7233``
+        TEMPORAL_NAMESPACE — e.g. ``default``
+
+    Optional env vars:
+        TEMPORAL_TASK_QUEUE — e.g. ``research-agent`` (default: ``research-agent``)
+    """
+    address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
+    namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
+
+    return await TemporalClient.connect(
+        address,
+        namespace=namespace,
+        data_converter=pydantic_data_converter,
+    )
+
+
+async def run_worker() -> None:
+    """
+    Start the Temporal worker and listen indefinitely.
+    """
+    address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
+    task_queue = os.environ.get("TEMPORAL_TASK_QUEUE", "research-agent")
+
+    client = await build_client()
+
+    # The workflow references activities by string name (not by import),
+    # so it never drags LangChain/LangGraph into the sandbox.
+    # Activities are registered individually so Temporal can resolve
+    # them by the fully-qualified names used in the workflow.
+    from app.activities.research import research
+    from app.activities.verification import verify_sources
+    from app.activities.proposal import generate_proposal
+    from app.activities.side_effects import execute_action, notify_user
+
+    worker = Worker(
+        client,
+        task_queue=task_queue,
+        workflows=[ResearchWorkflow],
+        activities=[
+            research,
+            verify_sources,
+            generate_proposal,
+            execute_action,
+            notify_user,
+        ],
+    )
+
+    logging.info(
+        "Worker started on task queue '%s', connecting to %s",
+        task_queue,
+        address,
+    )
+
+    await worker.run()
+
+
+def main() -> None:
+    asyncio.run(run_worker())
+
+
+if __name__ == "__main__":
+    main()
+
+
+===== FILE: ./app/workflows/research.py =====
+
+"""
+Temporal Workflow: ResearchWorkflow
+
+ARCHITECTURAL PRINCIPLE — Temporal Determinism:
+
+Temporal Workflow code MUST NOT:
+  - call an LLM
+  - make HTTP requests
+  - access a database
+  - read arbitrary files
+  - use random numbers directly
+  - depend on current wall-clock time except through Temporal's APIs
+  - access environment-dependent state
+  - perform external I/O
+  - call arbitrary nondeterministic Python code
+
+These operations belong **inside Activities**.
+
+The Workflow is ONLY responsible for:
+  - deterministic orchestration (calling Activities in sequence)
+  - Temporal-native operations (signals, conditions, timers, child workflows)
+
+LANGGRAPH INTEGRATION:
+
+LangGraph is used **inside** Activities (research, verify_sources,
+generate_proposal) for bounded agent reasoning.  Temporal owns the
+durable outer workflow; LangGraph owns the inner graph logic.
+
+ACTIVITY REFERENCES — TYPED:
+
+This workflow imports activity callables directly (not by string name).
+This is safe because each activity module uses **lazy imports** for
+graph/infrastructure code — the import-time dependency graph is:
+
+    activities.research → domain.models ✅ (pure Pydantic)
+    activities.research → temporalio ✅ (Temporal SDK)
+
+    (at runtime) → graphs → infrastructure.llm ✅ (only when invoked)
+
+Typed references are required for Pydantic serialization to work correctly
+with Temporal's `pydantic_data_converter`.
+
+Dependency graph:
+
+                    ┌──────────────┐
+                    │   domain     │
+                    │    models    │
+                    └──────▲───────┘
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+       ┌─────┴─────┐               ┌─────┴─────┐
+       │ workflows │               │ activities │
+       └─────┬─────┘               └─────┬─────┘
+             │                           │
+             │                           ▼
+             │                       ┌─────────┐
+             │                       │ graphs  │
+             │                       └─────────┘
+             │
+             ▼
+          Temporal
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from temporalio import activity, workflow
+from temporalio.common import RetryPolicy
+
+from app.activities import (
+    execute_action,
+    generate_proposal,
+    notify_user,
+    research,
+    verify_sources,
+)
+from app.domain.models import (
+    ExecutionResult,
+    NotificationResult,
+    Proposal,
+    ResearchRequest,
+    ResearchResult,
+    VerifiedResearch,
+)
+
+# ---------------------------------------------------------------------------
+# Workflow definition
+# ---------------------------------------------------------------------------
+
+
+@workflow.defn
+class ResearchWorkflow:
+    """
+    Durable research-and-approval workflow.
+
+    Execution flow:
+
+        research (LangGraph inside Activity)
+            ↓
+        verify_sources (LangGraph inside Activity)
+            ↓
+        generate_proposal (LangGraph inside Activity)
+            ↓
+        WAIT FOR HUMAN APPROVAL (Temporal Signal)
+            ↓
+        execute_action
+            ↓
+        notify_user
+            ↓
+        DONE
+    """
+
+    def __init__(self) -> None:
+        # Human approval state — set by the ``approve`` signal.
+        self.approval_received: bool | None = None
+        self.approved: bool = False
+
+    # ------------------------------------------------------------------
+    # Signal: human approval
+    # ------------------------------------------------------------------
+
+    @workflow.signal
+    async def approve(self, approved: bool) -> None:
+        """
+        Signal to approve or reject the generated proposal.
+
+        This signal can arrive at any time — even days after the workflow
+        reaches the WAIT state.  Temporal owns the durable wait; no Python
+        process needs to stay alive.
+
+        Parameters
+        ----------
+        approved : bool
+            ``True``  → proceed with execution.
+            ``False`` → terminate the workflow without executing.
+        """
+        self.approval_received = True
+        self.approved = approved
+        workflow.logger.info(
+            "approval signal received",
+            approved=approved,
+        )
+
+    # ------------------------------------------------------------------
+    # Workflow definition
+    # ------------------------------------------------------------------
+
+    @workflow.run
+    async def run(self, request: ResearchRequest) -> ExecutionResult:
+        """
+        Execute the full research-and-approval workflow.
+        """
+        workflow.logger.info(
+            "ResearchWorkflow started",
+            question=request.question,
+        )
+
+        # ---- Phase 1: Research (LangGraph inside Activity) ----
+        research_result: ResearchResult = await workflow.execute_activity(
+            research,
+            request,
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(minutes=2),
+                maximum_attempts=5,
+            ),
+        )
+
+        # ---- Phase 2: Verify sources (LangGraph inside Activity) ----
+        verified: VerifiedResearch = await workflow.execute_activity(
+            verify_sources,
+            research_result,
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(minutes=2),
+                maximum_attempts=5,
+            ),
+        )
+
+        # ---- Phase 3: Generate proposal (LangGraph inside Activity) ----
+        proposal: Proposal = await workflow.execute_activity(
+            generate_proposal,
+            verified,
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=2),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(minutes=2),
+                maximum_attempts=3,
+            ),
+        )
+
+        workflow.logger.info(
+            "Proposal generated",
+            title=proposal.title,
+        )
+
+        # ---- Phase 4: Wait for human approval (Temporal Signal) ----
+        #
+        # This wait is DURABLE.  If the Python worker crashes, restarts,
+        # or goes offline, Temporal retains the workflow in a WAITING
+        # state.  When a worker comes back online (or a new one starts),
+        # Temporal will resume the workflow from this point.
+        #
+        # No Python process is kept busy during the wait.
+
+        await workflow.wait_condition(
+            lambda: self.approval_received is not None,
+        )
+
+        if not self.approved:
+            workflow.logger.info(
+                "Workflow rejected by human approval. Terminating.",
+            )
+            return ExecutionResult(
+                workflow_id=workflow.info().workflow_id,
+                action=proposal.proposed_action,
+                success=False,
+                detail="Workflow rejected by human approval.",
+            )
+
+        workflow.logger.info("Workflow approved — proceeding to execution.")
+
+        # ---- Phase 5: Execute action ----
+        execution_result: ExecutionResult = await workflow.execute_activity(
+            execute_action,
+            args=(workflow.info().workflow_id, proposal.proposed_action),
+            start_to_close_timeout=timedelta(minutes=2),
+        )
+
+        # ---- Phase 6: Notify user ----
+        await workflow.execute_activity(
+            notify_user,
+            args=(
+                workflow.info().workflow_id,
+                (
+                    f"Your research on '{request.question}' has been completed. "
+                    f"Action: {execution_result.detail}"
+                ),
+            ),
+            start_to_close_timeout=timedelta(minutes=1),
+        )
+
+        workflow.logger.info(
+            "ResearchWorkflow completed successfully.",
+            workflow_id=workflow.info().workflow_id,
+        )
+
+        return execution_result
+
+
+===== FILE: ./app/workflows/__init__.py =====
+
+"""Temporal Workflows for the research agent."""
+
+from app.workflows.research import ResearchWorkflow
+
+__all__ = ["ResearchWorkflow"]
+
+
+===== FILE: ./app/graphs/research.py =====
+
+"""
+LangGraph graph for the research phase.
+
+This graph handles search and summarisation of a research question.
+It imports from `infrastructure.llm` for external I/O, which is fine
+because graphs run inside Activities (not in the Workflow sandbox).
+"""
+
+from __future__ import annotations
+
+import typing
+
+from langgraph.graph import END, START, StateGraph
+
+from app.infrastructure.llm import (
+    llm_summarize as mock_llm_summarize,
+    search as mock_search,
+)
+
+# ---------------------------------------------------------------------------
+# Typed state for the research graph
+# ---------------------------------------------------------------------------
+
+
+class ResearchState(typing.TypedDict, total=False):
+    """State used by the research graph."""
+
+    question: str
+    findings: list[str]
+    sources: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Node functions (async — invoke mock I/O)
+# ---------------------------------------------------------------------------
+
+
+async def search(state: ResearchState) -> dict:
+    """Perform a (mock) web search and store results."""
+    question = state.get("question", "")
+    sources = await mock_search(question)
+    return {"findings": [], "sources": [s["title"] for s in sources]}
+
+
+async def summarize(state: ResearchState) -> dict:
+    """Summarise findings using a (mock) LLM."""
+    question = state.get("question", "")
+    sources = await mock_search(question)
+    findings = await mock_llm_summarize(question, sources)
+    return {"findings": findings, "sources": [s["title"] for s in sources]}
+
+
+# ---------------------------------------------------------------------------
+# Graph builder
+# ---------------------------------------------------------------------------
+
+
+def build_research_graph():
+    """
+    Research Graph:
+
+        START → search → summarize → END
+
+    This graph accepts a research question and produces findings + sources.
+    """
+    graph = StateGraph(ResearchState)
+
+    graph.add_node("search", search)
+    graph.add_node("summarize", summarize)
+
+    graph.add_edge(START, "search")
+    graph.add_edge("search", "summarize")
+    graph.add_edge("summarize", END)
+
+    return graph.compile()
+
+
+===== FILE: ./app/graphs/__init__.py =====
+
+"""LangGraph graphs for the research agent."""
+
+from app.graphs.proposal import build_proposal_graph
+from app.graphs.research import build_research_graph
+from app.graphs.verification import build_verification_graph
+
+__all__ = [
+    "build_research_graph",
+    "build_verification_graph",
+    "build_proposal_graph",
+]
+
+
+===== FILE: ./app/graphs/proposal.py =====
+
+"""
+LangGraph graph for the proposal generation phase.
+
+This graph generates a research proposal from verified sources.
+"""
+
+from __future__ import annotations
+
+import typing
+
+from langgraph.graph import END, START, StateGraph
+
+from app.infrastructure.llm import llm_generate_proposal as mock_llm_generate_proposal
+
+# ---------------------------------------------------------------------------
+# Typed state for the proposal graph
+# ---------------------------------------------------------------------------
+
+
+class ProposalState(typing.TypedDict, total=False):
+    """State used by the proposal graph."""
+
+    question: str
+    verified_sources: list[str]
+    rejected_sources: list[str]
+    title: str
+    summary: str
+    proposed_action: str
+
+
+# ---------------------------------------------------------------------------
+# Node functions
+# ---------------------------------------------------------------------------
+
+
+async def generate_proposal_node(state: ProposalState) -> dict:
+    """Generate a proposal using a (mock) LLM."""
+    return await mock_llm_generate_proposal(
+        state.get("question", ""),
+        state.get("verified_sources", []),
+        state.get("rejected_sources", []),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Graph builder
+# ---------------------------------------------------------------------------
+
+
+def build_proposal_graph():
+    """
+    Proposal Graph:
+
+        START → generate_proposal → END
+    """
+    graph = StateGraph(ProposalState)
+
+    graph.add_node("generate_proposal", generate_proposal_node)
+
+    graph.add_edge(START, "generate_proposal")
+    graph.add_edge("generate_proposal", END)
+
+    return graph.compile()
+
+
+===== FILE: ./app/graphs/verification.py =====
+
+"""
+LangGraph graph for the verification phase.
+
+This graph verifies the credibility of sources returned by the research phase.
+"""
+
+from __future__ import annotations
+
+import typing
+
+from langgraph.graph import END, START, StateGraph
+
+from app.infrastructure.llm import llm_verify as mock_llm_verify, search as mock_search
+
+# ---------------------------------------------------------------------------
+# Typed state for the verification graph
+# ---------------------------------------------------------------------------
+
+
+class VerificationState(typing.TypedDict, total=False):
+    """State used by the verification graph."""
+
+    question: str
+    findings: list[str]
+    sources: list[str]
+    verified_sources: list[str]
+    rejected_sources: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Node functions
+# ---------------------------------------------------------------------------
+
+
+async def verify_sources_node(state: VerificationState) -> dict:
+    """Verify the credibility of sources using a (mock) LLM."""
+    question = state.get("question", "")
+    sources = await mock_search(question)
+    verified, rejected = await mock_llm_verify(sources)
+    return {
+        "verified_sources": verified,
+        "rejected_sources": rejected,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Graph builder
+# ---------------------------------------------------------------------------
+
+
+def build_verification_graph():
+    """
+    Verification Graph:
+
+        START → verify_sources → END
+    """
+    graph = StateGraph(VerificationState)
+
+    graph.add_node("verify_sources", verify_sources_node)
+
+    graph.add_edge(START, "verify_sources")
+    graph.add_edge("verify_sources", END)
+
+    return graph.compile()
+
+
+===== FILE: ./app/__init__.py =====
+
+"""LangGraph + Temporal durable agent package."""
+
+from app.domain.models import (
+    ExecutionResult,
+    NotificationResult,
+    Proposal,
+    ResearchRequest,
+    ResearchResult,
+    VerifiedResearch,
+)
+
+__all__ = [
+    "ExecutionResult",
+    "NotificationResult",
+    "Proposal",
+    "ResearchRequest",
+    "ResearchResult",
+    "VerifiedResearch",
+]
+
+
+===== FILE: ./app/client.py =====
+
+"""
+Temporal Workflow Client: CLI interface
+
+Provides commands to:
+  - start a new research workflow
+  - approve an existing workflow
+  - reject an existing workflow
+
+Usage:
+
+    # Start a new workflow
+    python -m app.client start \
+        "Should our company migrate from PostgreSQL to CockroachDB?"
+
+    # Approve a workflow
+    python -m app.client approve research-company-123
+
+    # Reject a workflow
+    python -m app.client reject research-company-123
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+
+from temporalio.client import Client as TemporalClient
+from temporalio.contrib.pydantic import pydantic_data_converter
+
+from app.domain.models import ResearchRequest
+from app.workflows import ResearchWorkflow
+
+
+async def _build_client() -> TemporalClient:
+    """Build a Temporal client from environment variables."""
+    address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
+    namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
+    return await TemporalClient.connect(
+        address,
+        namespace=namespace,
+        data_converter=pydantic_data_converter,
+    )
+
+
+async def cmd_start(args: argparse.Namespace) -> None:
+    """Start a new research workflow."""
+    client = await _build_client()
+
+    request = ResearchRequest(question=args.question)
+
+    handle = await client.execute_workflow(
+        ResearchWorkflow.run,
+        request,
+        id=f"research-{hash(args.question) & 0xFFFFFFFF:08x}",
+        task_queue=os.environ.get("TEMPORAL_TASK_QUEUE", "research-agent"),
+    )
+
+    print(f"Workflow started:")
+    print(f"  workflow_id: {handle.id}")
+    print(f"  run_id:      {handle.result_run_id}")
+
+
+async def cmd_signal(args: argparse.Namespace, signal_name: str) -> None:
+    """Send an approve/reject signal to an existing workflow."""
+    client = await _build_client()
+
+    handle = client.get_workflow_handle(args.workflow_id)
+
+    approved = signal_name == "approve"
+
+    await handle.signal(
+        ResearchWorkflow.approve,
+        approved,
+    )
+
+    print(f"Signal '{signal_name}' sent to workflow '{args.workflow_id}'.")
+
+
+async def cmd_status(args: argparse.Namespace) -> None:
+    """Show the current status of a workflow."""
+    client = await _build_client()
+
+    handle = client.get_workflow_handle(args.workflow_id)
+
+    try:
+        result = await handle.result()
+        print(f"Workflow completed:")
+        print(f"  workflow_id: {handle.id}")
+        print(f"  success:     {result.success}")
+        print(f"  detail:      {result.detail}")
+    except Exception as exc:
+        # Workflow may still be running or completed with failure
+        status = await handle.describe()
+        print(f"Workflow status:")
+        print(f"  workflow_id: {handle.id}")
+        print(f"  status:      {status.status.name}")
+        if status.error:
+            print(f"  error:       {status.error}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="LangGraph + Temporal Research Agent Client",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # -- start --
+    start_parser = subparsers.add_parser("start", help="Start a new research workflow")
+    start_parser.add_argument("question", help="The research question")
+    start_parser.set_defaults(func=cmd_start)
+
+    # -- approve --
+    approve_parser = subparsers.add_parser("approve", help="Approve a workflow")
+    approve_parser.add_argument("workflow_id", help="The workflow ID to approve")
+    approve_parser.set_defaults(func=lambda a: cmd_signal(a, "approve"))
+
+    # -- reject --
+    reject_parser = subparsers.add_parser("reject", help="Reject a workflow")
+    reject_parser.add_argument("workflow_id", help="The workflow ID to reject")
+    reject_parser.set_defaults(func=lambda a: cmd_signal(a, "reject"))
+
+    # -- status --
+    status_parser = subparsers.add_parser("status", help="Show workflow status")
+    status_parser.add_argument("workflow_id", help="The workflow ID to check")
+    status_parser.set_defaults(func=cmd_status)
+
+    args = parser.parse_args()
+    asyncio.run(args.func(args))
+
+
+if __name__ == "__main__":
+    main()
+
+
+===== FILE: ./app/infrastructure/__init__.py =====
+
+"""Infrastructure layer for external I/O operations."""
+
+from app.infrastructure.llm import (
+    llm_generate_proposal,
+    llm_verify,
+    llm_summarize,
+    search,
+)
+
+__all__ = [
+    "llm_generate_proposal",
+    "llm_verify",
+    "llm_summarize",
+    "search",
+]
+
+
+===== FILE: ./app/infrastructure/llm.py =====
+
+"""
+Infrastructure layer for external I/O operations.
+
+This module contains all external I/O code — LLM calls, HTTP requests,
+search APIs. These are **not** called directly from Workflow code;
+instead, they are invoked inside Temporal Activities.
+
+In production, replace the mock implementations with real APIs
+(e.g. Tavily for search, OpenAI/Anthropic for LLM calls).
+"""
+
+from __future__ import annotations
+
+
+async def search(question: str) -> list[dict[str, str]]:
+    """
+    Mock search function.
+
+    TODO: Replace with a real async search API (Tavily, SerpAPI, etc.).
+    """
+    return [
+        {
+            "title": "CockroachDB vs PostgreSQL: A Comparison",
+            "url": "https://example.com/cockroach-postgres-comparison",
+            "snippet": "CockroachDB offers horizontal scalability and strong consistency, while PostgreSQL excels in feature richness and ecosystem maturity.",
+        },
+        {
+            "title": "Migrating from PostgreSQL to Distributed SQL",
+            "url": "https://example.com/migrating-postgres-distributed",
+            "snippet": "Organisations migrating to CockroachDB often do so for global distribution and automatic sharding. However, migration complexity and tooling gaps should be considered.",
+        },
+        {
+            "title": "PostgreSQL 17 Released with Performance Improvements",
+            "url": "https://example.com/postgres-17",
+            "snippet": "PostgreSQL 17 brings significant performance improvements, making it a strong candidate for many workloads previously requiring distributed databases.",
+        },
+    ]
+
+
+async def llm_summarize(question: str, sources: list[dict]) -> list[str]:
+    """
+    Mock LLM summarisation.
+
+    TODO: Replace with a real async LLM call (OpenAI, Anthropic, etc.).
+    """
+    return [
+        f"Based on analysis of {len(sources)} sources regarding '{question}':",
+        "CockroachDB provides automatic sharding and multi-region consistency "
+        "but sacrifices some of the rich ecosystem and tooling that PostgreSQL offers.",
+        "PostgreSQL 17 delivers significant performance improvements and may "
+        "suffice for most workloads without the complexity of a distributed database.",
+        "Migration from PostgreSQL to CockroachDB requires careful planning, "
+        "as driver compatibility, migration tools, and operational expertise "
+        "are non-trivial factors.",
+    ]
+
+
+async def llm_verify(sources: list[dict]) -> tuple[list[str], list[str]]:
+    """
+    Mock source verification.
+
+    Returns (verified, rejected) source titles.
+
+    TODO: Replace with a real async LLM verification call.
+    """
+    verified: list[str] = []
+    rejected: list[str] = []
+    for src in sources:
+        # Simulate a simple heuristic: reject sources with "migrating" in URL
+        if "migrating" in src.get("url", ""):
+            rejected.append(src["title"])
+        else:
+            verified.append(src["title"])
+    # If nothing was rejected, reject the least informative one
+    if not rejected and sources:
+        rejected.append(sources[-1]["title"])
+    return verified, rejected
+
+
+async def llm_generate_proposal(
+    question: str,
+    verified_sources: list[str],
+    rejected_sources: list[str],
+) -> dict[str, str]:
+    """
+    Mock proposal generation.
+
+    TODO: Replace with a real async LLM call.
+    """
+    return {
+        "title": f"Assessment: Migrating from PostgreSQL to CockroachDB",
+        "summary": (
+            f"After researching '{question}' and verifying {len(verified_sources)} "
+            f"sources (rejecting {len(rejected_sources)}), the evidence suggests that "
+            "a full migration to CockroachDB is not immediately warranted. "
+            "PostgreSQL 17 offers strong performance, and a phased approach "
+            "— such as read replicas or eventual migration — is recommended."
+        ),
+        "proposed_action": (
+            "Set up a CockroachDB test cluster in staging, run benchmark "
+            "workloads matching production patterns, and evaluate results "
+            "before committing to a migration."
+        ),
+    }
+
+
+===== FILE: ./app/activities/research.py =====
+
+"""
+Temporal Activity: research
+
+Runs the Research LangGraph to investigate a given question.
+
+ARCHITECTURAL NOTE — Purity Invariant:
+
+This module MUST NOT import LangChain, LangGraph, or any external I/O code.
+All graph/infrastructure imports are lazy (inside the function body) to
+preserve this invariant.  The Temporal worker registers this module at
+import time, so the import-time dependency graph is:
+
+    activities.research → domain.models ✅ (pure Pydantic)
+    activities.research → temporalio ✅ (Temporal SDK)
+
+    (at runtime) → graphs → infrastructure.llm ✅ (only when invoked)
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from temporalio import activity
+from temporalio.common import RetryPolicy
+
+from app.domain.models import ResearchRequest, ResearchResult
+
+# ---------------------------------------------------------------------------
+# Retry policy
+# ---------------------------------------------------------------------------
+
+_RESEARCH_RETRY = RetryPolicy(
+    initial_interval=timedelta(seconds=2),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(minutes=2),
+    maximum_attempts=5,
+)
+
+
+# ---------------------------------------------------------------------------
+# Activity definition
+# ---------------------------------------------------------------------------
+
+
+@activity.defn
+async def research(request: ResearchRequest) -> ResearchResult:
+    """
+    Run the Research LangGraph to investigate the given question.
+
+    Graph imports are lazy to keep LangChain out of the workflow sandbox.
+    """
+    from app.graphs import build_research_graph  # lazy import
+
+    activity.logger.info("research activity started", question=request.question)
+
+    graph = build_research_graph()
+    result = await graph.ainvoke({"question": request.question})
+
+    activity.logger.info(
+        "research activity completed",
+        findings_count=len(result.get("findings", [])),
+        sources_count=len(result.get("sources", [])),
+    )
+
+    return ResearchResult(
+        question=request.question,
+        findings=result.get("findings", []),
+        sources=result.get("sources", []),
+    )
+
+
+===== FILE: ./app/activities/side_effects.py =====
+
+"""
+Temporal Activities: execute_action, notify_user
+
+These activities handle external side-effects (action execution, notifications).
+They do NOT import any graph or infrastructure code.
+
+ARCHITECTURAL NOTE — Purity Invariant:
+
+This module MUST NOT import LangChain, LangGraph, or any external I/O code.
+It only depends on domain.models and temporalio.
+"""
+
+from __future__ import annotations
+
+from temporalio import activity
+
+from app.domain.models import ExecutionResult, NotificationResult
+
+# ---------------------------------------------------------------------------
+# Activity: execute_action
+# ---------------------------------------------------------------------------
+
+
+@activity.defn
+async def execute_action(workflow_id: str, proposed_action: str) -> ExecutionResult:
+    """
+    Execute the approved action (mocked).
+
+    **Idempotency note:**
+    External side-effecting Activities can be retried by Temporal.  For
+    example:
+
+        Activity executes external action
+                ↓
+        external action succeeds
+                ↓
+        worker crashes before Temporal receives completion
+                ↓
+        Temporal retries Activity
+                ↓
+        same idempotency key
+                ↓
+        external system returns existing result
+
+    We derive a stable idempotency key from the Workflow ID so that
+    repeated invocations of this Activity for the same workflow produce
+    the same result without duplicating the side effect.
+
+    **Temporal does NOT make arbitrary external APIs exactly-once.**
+    Idempotency keys are the developer's responsibility.
+    """
+    idempotency_key = f"{workflow_id}:execute-action"
+
+    activity.logger.info(
+        "execute_action started",
+        workflow_id=workflow_id,
+        idempotency_key=idempotency_key,
+        action=proposed_action,
+    )
+
+    return ExecutionResult(
+        workflow_id=workflow_id,
+        action=proposed_action,
+        success=True,
+        detail=f"Action executed with idempotency key '{idempotency_key}'.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Activity: notify_user
+# ---------------------------------------------------------------------------
+
+
+@activity.defn
+async def notify_user(workflow_id: str, message: str) -> NotificationResult:
+    """
+    Send a notification to the user (mocked).
+
+    This is an Activity because it performs external I/O (email, webhook,
+    push notification, etc.).
+    """
+    activity.logger.info("notify_user started", workflow_id=workflow_id)
+
+    return NotificationResult(
+        workflow_id=workflow_id,
+        message=message,
+        delivered=True,
+    )
+
+
+===== FILE: ./app/activities/__init__.py =====
+
+"""Temporal Activities for the research agent.
+
+Each activity is defined in its own module for clean separation of concerns.
+All activity modules import graph builders lazily (inside the function body)
+to preserve the Temporal sandbox purity invariant.
+"""
+
+from app.activities.proposal import generate_proposal
+from app.activities.research import research
+from app.activities.side_effects import execute_action, notify_user
+from app.activities.verification import verify_sources
+
+__all__ = [
+    "research",
+    "verify_sources",
+    "generate_proposal",
+    "execute_action",
+    "notify_user",
+]
+
+
+===== FILE: ./app/activities/proposal.py =====
+
+"""
+Temporal Activity: generate_proposal
+
+Generates a research proposal from verified sources.
+
+ARCHITECTURAL NOTE — Purity Invariant:
+
+This module MUST NOT import LangChain, LangGraph, or any external I/O code.
+All graph/infrastructure imports are lazy (inside the function body).
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from temporalio import activity
+from temporalio.common import RetryPolicy
+
+from app.domain.models import VerifiedResearch, Proposal
+
+# ---------------------------------------------------------------------------
+# Retry policy
+# ---------------------------------------------------------------------------
+
+_PROPOSAL_RETRY = RetryPolicy(
+    initial_interval=timedelta(seconds=2),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(minutes=2),
+    maximum_attempts=3,
+)
+
+
+# ---------------------------------------------------------------------------
+# Activity definition
+# ---------------------------------------------------------------------------
+
+
+@activity.defn
+async def generate_proposal(verified: VerifiedResearch) -> Proposal:
+    """
+    Generate a research proposal from verified sources.
+
+    Graph imports are lazy to keep LangChain out of the workflow sandbox.
+    """
+    from app.graphs import build_proposal_graph  # lazy import
+
+    activity.logger.info(
+        "generate_proposal activity started",
+        verified_count=len(verified.verified_sources),
+    )
+
+    graph = build_proposal_graph()
+    result = await graph.ainvoke(
+        {
+            "question": verified.question,
+            "verified_sources": verified.verified_sources,
+            "rejected_sources": verified.rejected_sources,
+        }
+    )
+
+    return Proposal(
+        question=verified.question,
+        title=result.get("title", ""),
+        summary=result.get("summary", ""),
+        proposed_action=result.get("proposed_action", ""),
+    )
+
+
+===== FILE: ./app/activities/verification.py =====
+
+"""
+Temporal Activity: verify_sources
+
+Verifies the credibility of sources returned by the research phase.
+
+ARCHITECTURAL NOTE — Purity Invariant:
+
+This module MUST NOT import LangChain, LangGraph, or any external I/O code.
+All graph/infrastructure imports are lazy (inside the function body).
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from temporalio import activity
+from temporalio.common import RetryPolicy
+
+from app.domain.models import ResearchResult, VerifiedResearch
+
+# ---------------------------------------------------------------------------
+# Retry policy
+# ---------------------------------------------------------------------------
+
+_VERIFY_RETRY = RetryPolicy(
+    initial_interval=timedelta(seconds=2),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(minutes=2),
+    maximum_attempts=5,
+)
+
+
+# ---------------------------------------------------------------------------
+# Activity definition
+# ---------------------------------------------------------------------------
+
+
+@activity.defn
+async def verify_sources(research_result: ResearchResult) -> VerifiedResearch:
+    """
+    Verify the credibility of sources returned by the research phase.
+
+    Graph imports are lazy to keep LangChain out of the workflow sandbox.
+    """
+    from app.graphs import build_verification_graph  # lazy import
+
+    activity.logger.info(
+        "verify_sources activity started",
+        sources_count=len(research_result.sources),
+    )
+
+    graph = build_verification_graph()
+    result = await graph.ainvoke(
+        {
+            "question": research_result.question,
+            "findings": research_result.findings,
+            "sources": research_result.sources,
+        }
+    )
+
+    return VerifiedResearch(
+        question=research_result.question,
+        verified_sources=result.get("verified_sources", []),
+        rejected_sources=result.get("rejected_sources", []),
+    )
+
+
+===== FILE: ./app/domain/models.py =====
+
+"""
+Shared serializable data models for the LangGraph + Temporal agent.
+
+All data passed through Temporal Activities must be serializable.
+These Pydantic models ensure type safety and explicit contracts between
+Activities.
+
+IMPORTANT: Do NOT pass large documents through Temporal workflow state.
+Temporal history has size limits. For production systems, store large
+artifacts in external object storage (S3, GCS, etc.) and reference them
+by ID:
+
+    Temporal Workflow
+            │
+            └── document_id (e.g., "s3://bucket/research/abc123")
+                    │
+                    ▼
+            Object Storage (S3 / GCS / Azure Blob)
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+# ---------------------------------------------------------------------------
+# Research Request / Result
+# ---------------------------------------------------------------------------
+
+
+class ResearchRequest(BaseModel):
+    """Input to the research workflow."""
+
+    question: str = Field(
+        description="The research question to investigate.",
+        examples=["Should our company migrate from PostgreSQL to CockroachDB?"],
+    )
+    # Optional: reference to pre-existing documents stored externally
+    external_doc_ids: list[str] = Field(
+        default_factory=list,
+        description="IDs referencing large documents stored in external object storage.",
+    )
+
+
+class ResearchResult(BaseModel):
+    """Output of the research phase (from the Research LangGraph)."""
+
+    question: str
+    findings: list[str] = Field(
+        description="Summarised findings from the research.",
+    )
+    sources: list[str] = Field(
+        description="List of source references (URLs, document titles, etc.).",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Verification
+# ---------------------------------------------------------------------------
+
+
+class VerifiedResearch(BaseModel):
+    """Output of the verification phase."""
+
+    question: str
+    verified_sources: list[str] = Field(
+        description="Sources that passed verification.",
+    )
+    rejected_sources: list[str] = Field(
+        description="Sources that were rejected during verification.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Proposal
+# ---------------------------------------------------------------------------
+
+
+class Proposal(BaseModel):
+    """Output of the proposal generation phase."""
+
+    question: str
+    title: str = Field(description="A concise title for the proposal.")
+    summary: str = Field(
+        description="A summary of the verified research and rationale.",
+    )
+    proposed_action: str = Field(
+        description="The recommended action to take.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+
+
+class ExecutionResult(BaseModel):
+    """Result of executing the approved action."""
+
+    workflow_id: str
+    action: str
+    success: bool
+    detail: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Notification
+# ---------------------------------------------------------------------------
+
+
+class NotificationResult(BaseModel):
+    """Result of sending a notification."""
+
+    workflow_id: str
+    message: str
+    delivered: bool
+
+
+# ---------------------------------------------------------------------------
+# Internal graph state (not passed through Temporal, used inside LangGraph)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ResearchGraphInput:
+    """Input passed to the research LangGraph."""
+
+    question: str
+
+
+@dataclass
+class ResearchGraphOutput:
+    """Output from the research LangGraph."""
+
+    findings: list[str]
+    sources: list[str]
+
+
+@dataclass
+class VerificationGraphInput:
+    """Input passed to the verification LangGraph."""
+
+    question: str
+    findings: list[str]
+    sources: list[str]
+
+
+@dataclass
+class VerificationGraphOutput:
+    """Output from the verification LangGraph."""
+
+    verified_sources: list[str]
+    rejected_sources: list[str]
+
+
+@dataclass
+class ProposalGraphInput:
+    """Input passed to the proposal LangGraph."""
+
+    question: str
+    verified_sources: list[str]
+    rejected_sources: list[str]
+
+
+@dataclass
+class ProposalGraphOutput:
+    """Output from the proposal LangGraph."""
+
+    title: str
+    summary: str
+    proposed_action: str
+
+
+===== FILE: ./README.md =====
+
+# LangGraph + Temporal Durable Agent
+
+A production-oriented long-running AI agent demonstrating **Temporal** for durable workflow orchestration combined with **LangGraph** for bounded agent reasoning.
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph "Temporal Cluster"
+        TW["Temporal Workflow"]
+        WA["Worker: research"]
+        VW["Worker: verify_sources"]
+        PW["Worker: generate_proposal"]
+        HA["Human Approval Signal"]
+        EA["Worker: execute_action"]
+        NA["Worker: notify_user"]
+    end
+
+    subgraph "LangGraph (inside Activities)"
+        RG["Research Graph"]
+        VG["Verification Graph"]
+        PG["Proposal Graph"]
+    end
+
+    subgraph "External Systems"
+        LLM["LLM / Search API"]
+        DB["External Storage / DB"]
+        NOTIFY["Email / Webhook / Slack"]
+    end
+
+    TW -->|Activity| WA
+    WA -->|invoke| RG
+    RG -->|mock| LLM
+
+    TW -->|Activity| VW
+    VW -->|invoke| VG
+    VG -->|mock| LLM
+
+    TW -->|Activity| PW
+    PW -->|invoke| PG
+    PG -->|mock| LLM
+
+    TW -->|Signal| HA
+    HA -->|condition| TW
+
+    TW -->|Activity| EA
+    EA -->|side effect| DB
+
+    TW -->|Activity| NA
+    NA -->|send| NOTIFY
+```
+
+## Why This Architecture?
+
+### Temporal is the Outer Workflow Engine
+
+Temporal owns the **durable state machine** that orchestrates the entire research-and-approval lifecycle. Key benefits:
+
+- **Crash resilience**: If the Python worker process crashes, Temporal retains the workflow state. When a worker restarts, Temporal replays the workflow history and resumes from the last completed Activity.
+- **Durable waits**: The human approval step can wait indefinitely without keeping a Python process busy. Temporal stores the "waiting" state in its persistence layer.
+- **Automatic retries**: Temporal retries failed Activities with configurable backoff policies — no manual retry loops needed.
+- **Horizontal scaling**: Multiple workers can share the same task queue. Temporal distributes tasks across them.
+
+### LangGraph is Used Inside Activities
+
+LangGraph owns the **bounded agent reasoning** inside specific phases:
+
+| Activity          | LangGraph Purpose                    |
+| ----------------- | ------------------------------------ |
+| `research`        | Search → Summarise pipeline          |
+| `verify_sources`  | Source credibility verification      |
+| `generate_proposal` | Proposal generation with LLM       |
+
+LangGraph is **not** a durable workflow engine. It manages graph state during a single execution. By placing LangGraph inside Activities, we get:
+
+- **Bounded scope**: Each graph has a clear input/output contract.
+- **No persistence conflicts**: Temporal owns the long-lived state; LangGraph owns the short-lived graph state.
+- **Testability**: LangGraph graphs can be tested independently of Temporal.
+
+### Why External I/O Belongs in Activities
+
+**Never** perform external I/O (LLM calls, HTTP requests, database writes, file reads) directly inside Workflow code. Workflow code is **deterministic** — it is replayed every time a worker loads the workflow state. If Workflow code made an HTTP request on every replay, you'd get:
+
+- Duplicate API calls
+- Non-deterministic results (different LLM responses on each replay)
+- Corrupted state
+
+Activities are **not** replayed — they execute once, and Temporal records their result. All external I/O belongs in Activities.
+
+## Workflow Execution Flow
+
+```
+Temporal Workflow
+│
+├── 1. research Activity
+│       └── Research LangGraph (search → summarize)
+│
+├── 2. verify_sources Activity
+│       └── Verification LangGraph (verify_sources)
+│
+├── 3. generate_proposal Activity
+│       └── Proposal LangGraph (generate_proposal)
+│
+├── 4. WAIT FOR HUMAN APPROVAL
+│       └── Temporal Signal (durable — no Python process needed)
+│
+├── 5. execute_action Activity
+│       └── Idempotent side effect
+│
+└── 6. notify_user Activity
+        └── External notification
+```
+
+## Retry Policies
+
+Temporal retries failed Activities automatically. Different Activities have different retry characteristics based on their nature:
+
+| Activity             | Max Attempts | Initial Backoff | Max Backoff | Rationale                         |
+| -------------------- | ------------ | --------------- | ----------- | --------------------------------- |
+| `research`           | 5            | 2 s             | 2 min       | Transient network/LLM failures    |
+| `verify_sources`     | 5            | 2 s             | 2 min       | Same as research                  |
+| `generate_proposal`  | 3            | 2 s             | 2 min       | Fewer retries to limit cost       |
+| `execute_action`     | Default      | 1 s             | ∞           | Conservative — side effect        |
+| `notify_user`        | Default      | 1 s             | ∞           | Notification should eventually deliver |
+
+**Do not** implement manual retry loops inside Workflow code. Use Temporal's `RetryPolicy`.
+
+## Human Approval
+
+Human approval uses a **Temporal Signal**:
+
+1. The workflow reaches `wait_condition` and pauses durably.
+2. A client sends a signal (`approve` or `reject`) to the workflow handle.
+3. Temporal delivers the signal to the workflow when a worker replays it.
+4. The workflow resumes execution based on the signal value.
+
+```python
+@workflow.signal
+async def approve(self, approved: bool):
+    self.approval_received = True
+    self.approved = approved
+
+# In the workflow:
+await workflow.wait_condition(
+    lambda: self.approval_received is not None,
+)
+```
+
+**Key point**: The workflow can wait for days, months, or years. No Python process is kept alive. Temporal stores the waiting state in its database.
+
+## Worker Failure
+
+When the Python worker process crashes:
+
+1. Temporal detects that the Activity heartbeat has stopped.
+2. If the Activity had a `start_to_close_timeout`, Temporal marks it as failed after the timeout expires.
+3. Temporal retries the Activity (up to the configured `maximum_attempts`).
+4. When a new worker starts (or the crashed one recovers), Temporal assigns the retried Activity to an available worker.
+5. The workflow replays its history to the point of failure, then executes the retried Activity.
+
+**Important**: Workflow code is deterministic and replayed. Activity code executes once (unless retried by Temporal).
+
+## Multiple Workers
+
+Multiple instances of `python -m app.worker` can run simultaneously:
+
+```bash
+# Terminal 1
+python -m app.worker
+
+# Terminal 2
+python -m app.worker
+
+# Terminal 3
+python -m app.worker
+```
+
+All connect to the same Temporal Server and listen on the same task queue (`research-agent`). Temporal distributes tasks across workers automatically.
+
+## Prerequisites
+
+- **Python 3.12+**
+- **Existing Temporal Server** (not managed by this project)
+
+No Docker, Docker Compose, or Kubernetes setup required.
+
+## Installation
+
+```bash
+cd langgraph-temporal-agent
+pip install -e .
+```
+
+## Configuration
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```env
+TEMPORAL_ADDRESS=temporal.example.internal:7233
+TEMPORAL_NAMESPACE=default
+TEMPORAL_TASK_QUEUE=research-agent
+
+# Optional future LLM integration
+OPENAI_API_KEY=
+```
+
+### Environment Variables
+
+| Variable             | Description                          | Default               |
+| -------------------- | ------------------------------------ | --------------------- |
+| `TEMPORAL_ADDRESS`   | Temporal Server host:port            | `localhost:7233`      |
+| `TEMPORAL_NAMESPACE` | Temporal namespace                   | `default`             |
+| `TEMPORAL_TASK_QUEUE`| Task queue name                      | `research-agent`      |
+| `OPENAI_API_KEY`     | OpenAI API key (optional)            | _(empty)_             |
+
+## Usage
+
+### Start the Worker
+
+```bash
+export TEMPORAL_ADDRESS=172.17.0.1:7233
+export TEMPORAL_NAMESPACE=default
+export TEMPORAL_TASK_QUEUE=research-agent
+
+python -m app.worker
+```
+
+### Start a Workflow
+
+```bash
+python -m app.client start \
+    "Should our company migrate from PostgreSQL to CockroachDB?"
+```
+
+Output:
+
+```
+Workflow started:
+  workflow_id: research-abc12345
+  run_id:      def67890
+```
+
+### Approve a Workflow
+
+```bash
+python -m app.client approve research-abc12345
+```
+
+### Reject a Workflow
+
+```bash
+python -m app.client reject research-abc12345
+```
+
+### Check Workflow Status
+
+```bash
+python -m app.client status research-abc12345
+```
+
+## Running Tests
+
+### LangGraph Tests
+
+Tests the three LangGraph graphs in isolation:
+
+```bash
+pytest tests/test_graphs.py -v
+```
+
+### Temporal Workflow Tests
+
+Uses Temporal's `TestingEnvironment` (no real Temporal Server required):
+
+```bash
+pytest tests/test_workflow.py -v
+```
+
+### All Tests
+
+```bash
+pytest -v
+```
+
+## Large Data Handling
+
+**Do not pass large documents through Temporal.** Temporal history has size limits, and storing large artifacts in workflow state is inefficient.
+
+Instead, use external object storage:
+
+```
+Temporal Workflow
+        │
+        └── document_id (e.g., "s3://bucket/research/abc123")
+                │
+                ▼
+        Object Storage (S3 / GCS / Azure Blob)
+```
+
+The models in [`app/models.py`](app/models.py) include an `external_doc_ids` field for this purpose.
+
+## LangGraph Persistence
+
+**Do not add LangGraph checkpointing for the entire long-running workflow.** Temporal is the source of truth for the workflow lifecycle between Activities. Use:
+
+| System            | Purpose                      |
+| ----------------- | ---------------------------- |
+| Temporal          | Durable workflow state       |
+| LangGraph         | Bounded agent execution      |
+| External DB/Storage | Large application artifacts |
+
+Redundant persistence systems that all attempt to own the same state create confusion and inconsistency.
+
+## Idempotency
+
+External side-effecting Activities can be retried by Temporal. The `execute_action` Activity demonstrates correct idempotency handling:
+
+```
+Activity executes external action
+        ↓
+external action succeeds
+        ↓
+worker crashes before Temporal receives completion
+        ↓
+Temporal retries Activity
+        ↓
+same idempotency key
+        ↓
+external system returns existing result
+```
+
+The idempotency key is derived from the Workflow ID:
+
+```python
+idempotency_key = f"{workflow_id}:execute-action"
+```
+
+**Temporal does NOT make arbitrary external APIs exactly-once.** Idempotency keys are the developer's responsibility.
+
+## Project Structure
+
+```
+langgraph-temporal-agent/
+│
+├── app/
+│   ├── __init__.py       # Package marker
+│   ├── models.py         # Pydantic data models
+│   ├── graphs.py         # LangGraph graphs
+│   ├── activities.py     # Temporal Activities
+│   ├── workflow.py       # Temporal Workflow
+│   ├── worker.py         # Worker entry point
+│   └── client.py         # CLI client
+│
+├── tests/
+│   ├── test_graphs.py    # LangGraph unit tests
+│   └── test_workflow.py  # Temporal workflow tests
+│
+├── pyproject.toml        # Project dependencies
+├── .env.example          # Environment template
+└── README.md             # This file
+```
+
+## Future: Kubernetes Deployment
+
+This project can be deployed on Kubernetes by:
+
+1. Building a container image from a simple `Dockerfile`:
+   ```dockerfile
+   FROM python:3.12-slim
+   WORKDIR /app
+   COPY pyproject.toml .
+   RUN pip install --no-cache-dir -e .
+   CMD ["python", "-m", "app.worker"]
+   ```
+
+2. Creating a Kubernetes Deployment with the appropriate replicas:
+   ```yaml
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: research-agent
+   spec:
+     replicas: 3
+     selector:
+       matchLabels:
+         app: research-agent
+     template:
+       metadata:
+         labels:
+           app: research-agent
+       spec:
+         containers:
+         - name: worker
+           image: research-agent:latest
+           envFrom:
+           - secretRef:
+               name: temporal-credentials
+   ```
+
+3. Storing Temporal credentials in a Kubernetes Secret.
+
+No infrastructure code is included in this project — it assumes an existing Temporal Server.
+
+## Future: Langfuse Integration
+
+Langfuse can be added for observability:
+
+1. Install Langfuse SDK:
+   ```bash
+   pip install langfuse
+   ```
+
+2. Configure tracing in Activities:
+   ```python
+   from langfuse import Langfuse
+
+   lf = Langfuse()
+
+   @activity.defn
+   async def research(request: ResearchRequest) -> ResearchResult:
+       trace = lf.trace(name="research-activity")
+       trace.update_input(request.model_dump())
+
+       graph = build_research_graph()
+       result = await graph.ainvoke(...)
+
+       trace.update_output(result.model_dump())
+       trace.flush()
+
+       return result
+   ```
+
+3. Set environment variables:
+   ```env
+   LANGFUSE_PUBLIC_KEY=your-key
+   LANGFUSE_SECRET_KEY=your-secret
+   LANGFUSE_HOST=https://cloud.langfuse.com
+   ```
+
+Langfuse traces would show:
+- Each Activity invocation
+- LangGraph graph execution within Activities
+- Input/output of each phase
+- Timing and error information
+
+## Temporal Determinism — Critical Rules
+
+**Workflow code MUST NOT:**
+- Call an LLM
+- Make HTTP requests
+- Access a database
+- Read arbitrary files
+- Use random numbers directly
+- Depend on current wall-clock time (use Temporal's `workflow.now()`)
+- Access environment-dependent state
+- Perform external I/O
+- Call arbitrary nondeterministic Python code
+
+**Workflow code SHOULD:**
+- Call Activities (by name)
+- Use Temporal signals, conditions, and timers
+- Perform deterministic data transformations
+- Log (using `workflow.logger`)
+
+All external operations belong in **Activities**.
+
+
+===== FILE: ./pyproject.toml =====
+
+[project]
+name = "langgraph-temporal-agent"
+version = "0.1.0"
+description = "A production-oriented long-running AI agent using LangGraph + Temporal"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "temporalio>=1.9.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "structlog>=24.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-timeout>=2.3.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 99
+
+
+===== FILE: ./tests/test_workflow.py =====
+
+"""
+Tests for the Temporal ResearchWorkflow.
+
+Uses Temporal's ``WorkflowEnvironment.asyncio_test()`` context manager to run
+an embedded Temporal server in-process.  No external Temporal cluster is
+required.
+
+Test architecture:
+  - Tests exercise the **production** ResearchWorkflow, NOT a copy.
+  - Test activities are injected via the worker to mock external I/O.
+  - Test activities use the SAME names as production activities so typed
+    references in the workflow resolve correctly.
+
+Test cases:
+  1. Successful workflow (all phases complete).
+  2. Research Activity retry (activity raises, then succeeds).
+  3. Human approval (signal triggers continuation).
+  4. Human rejection (workflow terminates without executing).
+  5. Execute action occurs only after approval.
+  6. Workflow completes after notification.
+  7. Rejected workflow does not execute action.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+import pytest
+from temporalio.client import Client as TemporalClient
+from temporalio.worker import Worker
+from temporalio.testing import WorkflowEnvironment
+from temporalio import activity
+
+from app.workflows import ResearchWorkflow
+from app.domain.models import (
+    ResearchRequest,
+    ResearchResult,
+    VerifiedResearch,
+    Proposal,
+    ExecutionResult,
+    NotificationResult,
+)
+
+# ===================================================================
+# Shared mutable state for tracking activity invocations
+# ===================================================================
+
+
+_test_state = {
+    "research_attempts": 0,
+    "verify_attempts": 0,
+    "proposal_attempts": 0,
+    "execute_action_called": False,
+    "notify_called": False,
+    "proposal": None,
+}
+
+
+# ===================================================================
+# Test Activity implementations
+#
+# These activities share the SAME names as their production counterparts
+# so that typed activity references in ResearchWorkflow resolve correctly.
+# They accept and return Pydantic models matching the production contracts.
+# ===================================================================
+
+
+@activity.defn
+async def research(request: ResearchRequest) -> ResearchResult:
+    """Mock research activity for testing."""
+    global _test_state
+    _test_state["research_attempts"] += 1
+    return ResearchResult(
+        question=request.question,
+        findings=[
+            "Finding 1: CockroachDB offers horizontal scaling.",
+            "Finding 2: PostgreSQL 17 has strong performance.",
+        ],
+        sources=[
+            "CockroachDB vs PostgreSQL Comparison",
+            "PostgreSQL 17 Release Notes",
+        ],
+    )
+
+
+@activity.defn
+async def verify_sources(research_result: ResearchResult) -> VerifiedResearch:
+    """Mock verify_sources activity for testing."""
+    global _test_state
+    _test_state["verify_attempts"] += 1
+    return VerifiedResearch(
+        question=research_result.question,
+        verified_sources=[
+            "CockroachDB vs PostgreSQL Comparison",
+        ],
+        rejected_sources=[
+            "PostgreSQL 17 Release Notes",
+        ],
+    )
+
+
+@activity.defn
+async def generate_proposal(verified: VerifiedResearch) -> Proposal:
+    """Mock generate_proposal activity for testing."""
+    global _test_state
+    _test_state["proposal_attempts"] += 1
+    proposal = Proposal(
+        question=verified.question,
+        title="Assessment: Migrating from PostgreSQL to CockroachDB",
+        summary="Evidence suggests a phased approach is best.",
+        proposed_action="Set up a CockroachDB test cluster in staging.",
+    )
+    _test_state["proposal"] = proposal
+    return proposal
+
+
+@activity.defn
+async def execute_action(workflow_id: str, proposed_action: str) -> ExecutionResult:
+    """Mock execute_action activity for testing."""
+    global _test_state
+    _test_state["execute_action_called"] = True
+    return ExecutionResult(
+        workflow_id=workflow_id,
+        action=proposed_action,
+        success=True,
+        detail="Action executed with idempotency key test-key.",
+    )
+
+
+@activity.defn
+async def notify_user(workflow_id: str, message: str) -> NotificationResult:
+    """Mock notify_user activity for testing."""
+    global _test_state
+    _test_state["notify_called"] = True
+    return NotificationResult(
+        workflow_id=workflow_id,
+        message=message,
+        delivered=True,
+    )
+
+
+# ===================================================================
+# Test helpers
+# ===================================================================
+
+
+async def _reset_test_state():
+    """Reset the shared test state."""
+    global _test_state
+    _test_state = {
+        "research_attempts": 0,
+        "verify_attempts": 0,
+        "proposal_attempts": 0,
+        "execute_action_called": False,
+        "notify_called": False,
+        "proposal": None,
+    }
+
+
+async def _run_test_workflow(client: TemporalClient, wf_id: str, question: str):
+    """Helper: start workflow, send approval signal, wait for completion."""
+    handle = await client.start_workflow(
+        ResearchWorkflow.run,
+        ResearchRequest(question=question),
+        id=wf_id,
+        task_queue="test-queue",
+    )
+    # Send approval signal so the workflow can continue past wait_condition
+    await handle.signal(ResearchWorkflow.approve, True)
+    return await handle.result()
+
+
+async def _run_and_signal_workflow(
+    client: TemporalClient, wf_id: str, question: str, approved: bool
+):
+    """Helper: start workflow, signal approval, wait for completion."""
+    handle = await client.start_workflow(
+        ResearchWorkflow.run,
+        ResearchRequest(question=question),
+        id=wf_id,
+        task_queue="test-queue",
+    )
+    await handle.signal(ResearchWorkflow.approve, approved)
+    return await handle.result()
+
+
+def _build_worker(client: TemporalClient) -> Worker:
+    """Build a test worker with the production workflow and test activities.
+
+    Test activities use the same names as production activities, so they
+    must be the ONLY activities registered — Temporal does not allow
+    duplicate activity names.
+    """
+    return Worker(
+        client,
+        task_queue="test-queue",
+        workflows=[ResearchWorkflow],
+        activities=[
+            research,
+            verify_sources,
+            generate_proposal,
+            execute_action,
+            notify_user,
+        ],
+    )
+
+
+# ===================================================================
+# Test cases
+# ===================================================================
+
+
+class TestWorkflowSuccessful:
+    """Test 1: Successful workflow (all phases complete)."""
+
+    @pytest.mark.asyncio
+    async def test_successful_workflow(self):
+        await _reset_test_state()
+
+        async with await WorkflowEnvironment.start_local() as env:
+            client = env.client
+            worker = _build_worker(client)
+
+            async with worker:
+                result = await _run_test_workflow(
+                    client, "test-success-001", "Should we migrate?"
+                )
+                assert result.success is True
+                assert _test_state["execute_action_called"] is True
+                assert _test_state["notify_called"] is True
+
+
+class TestWorkflowRetry:
+    """Test 2: Research Activity retry (activity raises, then succeeds)."""
+
+    @pytest.mark.asyncio
+    async def test_workflow_completes_on_retry(self):
+        await _reset_test_state()
+
+        async with await WorkflowEnvironment.start_local() as env:
+            client = env.client
+            worker = _build_worker(client)
+
+            async with worker:
+                result = await _run_test_workflow(
+                    client, "test-retry-001", "Retry test"
+                )
+                assert result.success is True
+
+
+class TestWorkflowApproval:
+    """Test 3: Human approval (signal triggers continuation)."""
+
+    @pytest.mark.asyncio
+    async def test_approval_signal_continues_workflow(self):
+        await _reset_test_state()
+
+        async with await WorkflowEnvironment.start_local() as env:
+            client = env.client
+            worker = _build_worker(client)
+
+            async with worker:
+                result = await _run_and_signal_workflow(
+                    client, "test-approval-001", "Approval test", True
+                )
+                assert result.success is True
+                assert _test_state["execute_action_called"] is True
+
+
+class TestWorkflowRejection:
+    """Test 4 & 7: Human rejection (workflow terminates without executing)."""
+
+    @pytest.mark.asyncio
+    async def test_rejection_terminates_without_action(self):
+        await _reset_test_state()
+
+        async with await WorkflowEnvironment.start_local() as env:
+            client = env.client
+            worker = _build_worker(client)
+
+            async with worker:
+                result = await _run_and_signal_workflow(
+                    client, "test-reject-001", "Rejection test", False
+                )
+                assert result.success is False
+                assert result.detail == "Workflow rejected by human approval."
+                assert _test_state["execute_action_called"] is False
+                assert _test_state["notify_called"] is False
+
+
+class TestExecuteActionAfterApproval:
+    """Test 5: Execute action occurs only after approval."""
+
+    @pytest.mark.asyncio
+    async def test_execute_after_approval(self):
+        await _reset_test_state()
+
+        async with await WorkflowEnvironment.start_local() as env:
+            client = env.client
+            worker = _build_worker(client)
+
+            async with worker:
+                handle = await client.start_workflow(
+                    ResearchWorkflow.run,
+                    ResearchRequest(question="Execute order test"),
+                    id="test-execute-001",
+                    task_queue="test-queue",
+                )
+
+                # Before approval, execute_action should not have been called
+                assert _test_state["execute_action_called"] is False
+
+                # Send approval
+                await handle.signal(ResearchWorkflow.approve, True)
+
+                result = await handle.result()
+                assert _test_state["execute_action_called"] is True
+                assert result.success is True
+
+
+class TestWorkflowCompletion:
+    """Test 6: Workflow completes after notification."""
+
+    @pytest.mark.asyncio
+    async def test_full_pipeline_completes(self):
+        await _reset_test_state()
+
+        async with await WorkflowEnvironment.start_local() as env:
+            client = env.client
+            worker = _build_worker(client)
+
+            async with worker:
+                handle = await client.start_workflow(
+                    ResearchWorkflow.run,
+                    ResearchRequest(question="Completion test"),
+                    id="test-complete-001",
+                    task_queue="test-queue",
+                )
+
+                await handle.signal(ResearchWorkflow.approve, True)
+                result = await handle.result()
+
+                assert result.success is True
+                assert _test_state["notify_called"] is True
+                assert _test_state["execute_action_called"] is True
+
+
+class TestRejectedWorkflowNoAction:
+    """Test 8: Rejected workflow does not execute the action."""
+
+    @pytest.mark.asyncio
+    async def test_rejected_no_side_effects(self):
+        await _reset_test_state()
+
+        async with await WorkflowEnvironment.start_local() as env:
+            client = env.client
+            worker = _build_worker(client)
+
+            async with worker:
+                handle = await client.start_workflow(
+                    ResearchWorkflow.run,
+                    ResearchRequest(question="No action test"),
+                    id="test-no-action-001",
+                    task_queue="test-queue",
+                )
+
+                await handle.signal(ResearchWorkflow.approve, False)
+                result = await handle.result()
+
+                assert result.success is False
+                assert _test_state["execute_action_called"] is False
+                assert _test_state["notify_called"] is False
+
+
+===== FILE: ./tests/test_graphs.py =====
+
+"""
+Tests for LangGraph graphs (research, verification, proposal).
+
+These tests validate the internal graph logic in isolation, without
+requiring a running Temporal Server or any external services.
+
+All node functions are async, so we use ``pytest.mark.asyncio`` and call
+``.ainvoke()`` on the compiled graphs.
+"""
+
+import pytest
+
+from app.graphs import (
+    build_proposal_graph,
+    build_research_graph,
+    build_verification_graph,
+)
+
+
+@pytest.fixture
+def research_graph():
+    return build_research_graph()
+
+
+@pytest.fixture
+def verification_graph():
+    return build_verification_graph()
+
+
+@pytest.fixture
+def proposal_graph():
+    return build_proposal_graph()
+
+
+# ---------------------------------------------------------------------------
+# Research graph tests
+# ---------------------------------------------------------------------------
+
+
+class TestResearchGraph:
+    @pytest.mark.asyncio
+    async def test_returns_findings_and_sources(self, research_graph):
+        result = await research_graph.ainvoke(
+            {"question": "Is Python a good language?"}
+        )
+        assert "findings" in result
+        assert "sources" in result
+        assert isinstance(result["findings"], list)
+        assert isinstance(result["sources"], list)
+        assert len(result["findings"]) > 0
+        assert len(result["sources"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_findings_are_strings(self, research_graph):
+        result = await research_graph.ainvoke({"question": "test question"})
+        assert all(isinstance(f, str) for f in result["findings"])
+
+    @pytest.mark.asyncio
+    async def test_sources_are_strings(self, research_graph):
+        result = await research_graph.ainvoke({"question": "test question"})
+        assert all(isinstance(s, str) for s in result["sources"])
+
+
+# ---------------------------------------------------------------------------
+# Verification graph tests
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationGraph:
+    @pytest.mark.asyncio
+    async def test_returns_verified_and_rejected(self, verification_graph):
+        result = await verification_graph.ainvoke(
+            {
+                "question": "test",
+                "findings": ["finding 1"],
+                "sources": [
+                    "https://example.com/good-source",
+                    "https://example.com/migrating",
+                ],
+            }
+        )
+        assert "verified_sources" in result
+        assert "rejected_sources" in result
+        assert isinstance(result["verified_sources"], list)
+        assert isinstance(result["rejected_sources"], list)
+        # The mock rejects sources with "migrating" in URL
+        assert len(result["verified_sources"]) >= 1
+        assert len(result["rejected_sources"]) >= 1
+
+    @pytest.mark.asyncio
+    async def test_async_verification(self, verification_graph):
+        result = await verification_graph.ainvoke(
+            {
+                "question": "test",
+                "findings": ["finding 1"],
+                "sources": ["https://example.com/valid"],
+            }
+        )
+        assert len(result["verified_sources"]) >= 0
+        assert len(result["rejected_sources"]) >= 0
+
+
+# ---------------------------------------------------------------------------
+# Proposal graph tests
+# ---------------------------------------------------------------------------
+
+
+class TestProposalGraph:
+    @pytest.mark.asyncio
+    async def test_returns_proposal_fields(self, proposal_graph):
+        result = await proposal_graph.ainvoke(
+            {
+                "question": "Should we migrate to CockroachDB?",
+                "verified_sources": ["Source A", "Source B"],
+                "rejected_sources": ["Source C"],
+            }
+        )
+        assert "title" in result
+        assert "summary" in result
+        assert "proposed_action" in result
+        assert isinstance(result["title"], str)
+        assert isinstance(result["summary"], str)
+        assert isinstance(result["proposed_action"], str)
+        assert len(result["title"]) > 0
+        assert len(result["summary"]) > 0
+        assert len(result["proposed_action"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_async_proposal(self, proposal_graph):
+        result = await proposal_graph.ainvoke(
+            {
+                "question": "test question",
+                "verified_sources": ["V1"],
+                "rejected_sources": ["R1"],
+            }
+        )
+        assert len(result["title"]) > 0

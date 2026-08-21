@@ -28,12 +28,11 @@ from datetime import timedelta
 import pytest
 from temporalio.client import Client as TemporalClient
 from temporalio.worker import Worker
-from temporalio.worker._workflow_instance import UnsandboxedWorkflowRunner
 from temporalio.testing import WorkflowEnvironment
 from temporalio import activity
 
-from app.workflow import ResearchWorkflow
-from app.models import (
+from app.workflows import ResearchWorkflow
+from app.domain.models import (
     ResearchRequest,
     ResearchResult,
     VerifiedResearch,
@@ -186,12 +185,16 @@ async def _run_and_signal_workflow(
 
 
 def _build_worker(client: TemporalClient) -> Worker:
-    """Build a test worker with the production workflow and test activities."""
+    """Build a test worker with the production workflow and test activities.
+
+    Test activities use the same names as production activities, so they
+    must be the ONLY activities registered — Temporal does not allow
+    duplicate activity names.
+    """
     return Worker(
         client,
         task_queue="test-queue",
         workflows=[ResearchWorkflow],
-        workflow_runner=UnsandboxedWorkflowRunner(),
         activities=[
             research,
             verify_sources,

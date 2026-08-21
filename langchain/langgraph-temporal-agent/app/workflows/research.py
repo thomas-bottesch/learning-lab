@@ -20,9 +20,46 @@ The Workflow is ONLY responsible for:
   - deterministic orchestration (calling Activities in sequence)
   - Temporal-native operations (signals, conditions, timers, child workflows)
 
+LANGGRAPH INTEGRATION:
+
 LangGraph is used **inside** Activities (research, verify_sources,
 generate_proposal) for bounded agent reasoning.  Temporal owns the
 durable outer workflow; LangGraph owns the inner graph logic.
+
+ACTIVITY REFERENCES — TYPED:
+
+This workflow imports activity callables directly (not by string name).
+This is safe because each activity module uses **lazy imports** for
+graph/infrastructure code — the import-time dependency graph is:
+
+    activities.research → domain.models ✅ (pure Pydantic)
+    activities.research → temporalio ✅ (Temporal SDK)
+
+    (at runtime) → graphs → infrastructure.llm ✅ (only when invoked)
+
+Typed references are required for Pydantic serialization to work correctly
+with Temporal's `pydantic_data_converter`.
+
+Dependency graph:
+
+                    ┌──────────────┐
+                    │   domain     │
+                    │    models    │
+                    └──────▲───────┘
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+       ┌─────┴─────┐               ┌─────┴─────┐
+       │ workflows │               │ activities │
+       └─────┬─────┘               └─────┬─────┘
+             │                           │
+             │                           ▼
+             │                       ┌─────────┐
+             │                       │ graphs  │
+             │                       └─────────┘
+             │
+             ▼
+          Temporal
 """
 
 from __future__ import annotations
@@ -32,7 +69,14 @@ from datetime import timedelta
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
-from app.models import (
+from app.activities import (
+    execute_action,
+    generate_proposal,
+    notify_user,
+    research,
+    verify_sources,
+)
+from app.domain.models import (
     ExecutionResult,
     NotificationResult,
     Proposal,
@@ -40,13 +84,10 @@ from app.models import (
     ResearchResult,
     VerifiedResearch,
 )
-from app.activities import (
-    research,
-    verify_sources,
-    generate_proposal,
-    execute_action,
-    notify_user,
-)
+
+# ---------------------------------------------------------------------------
+# Workflow definition
+# ---------------------------------------------------------------------------
 
 
 @workflow.defn
@@ -117,8 +158,6 @@ class ResearchWorkflow:
         )
 
         # ---- Phase 1: Research (LangGraph inside Activity) ----
-        # Use typed activity reference (not string name) so pydantic_data_converter
-        # returns proper Pydantic model instances instead of raw dicts.
         research_result: ResearchResult = await workflow.execute_activity(
             research,
             request,
@@ -189,9 +228,6 @@ class ResearchWorkflow:
         workflow.logger.info("Workflow approved — proceeding to execution.")
 
         # ---- Phase 5: Execute action ----
-        # When using typed activity references with multiple parameters,
-        # pass all arguments via the `args=` keyword since `execute_activity`
-        # only accepts one positional argument after the activity reference.
         execution_result: ExecutionResult = await workflow.execute_activity(
             execute_action,
             args=(workflow.info().workflow_id, proposal.proposed_action),

@@ -29,8 +29,8 @@ import sys
 from temporalio.client import Client as TemporalClient
 from temporalio.contrib.pydantic import pydantic_data_converter
 
-from app.models import ResearchRequest
-from app.workflow import ResearchWorkflow
+from app.domain.models import ResearchRequest
+from app.workflows import ResearchWorkflow
 
 
 async def _build_client() -> TemporalClient:
