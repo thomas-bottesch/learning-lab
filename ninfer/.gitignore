@@ -1,0 +1,6 @@
+/cache/*
+/vllm_models/*
+/models/*
+!/vllm_models/README.md
+bash_history
+/open-webui/*

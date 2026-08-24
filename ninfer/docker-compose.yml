@@ -1,0 +1,61 @@
+version: "3.9"
+
+services:
+  ninfer-serve:
+    image: ninfer:local
+    container_name: ninfer-serve
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    ports:
+      - "11434:8080"
+
+    volumes:
+      - ./models:/models:ro
+
+    command:
+      - ninfer-serve
+      # - /models/qwen3_8_27b_nvfp4.ninfer
+      - /models/qwen3_6_35b_a3b.ninfer
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8080"
+      - --max-context
+      - "250000"
+      - --prefill-chunk
+      - "1024"
+      - --kv-dtype
+      - int8
+      - --spec
+      - mtp
+      - --draft-tokens
+      - "3"
+      - --lm-head-draft
+      - --log-stats-interval-ms
+      - "1000"
+
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - ./open-webui:/app/backend/data
+
+    environment:
+      - OPENAI_API_BASE_URL=http://ninfer-serve:8080/v1
+      - OPENAI_API_KEY=
+      - WEBUI_AUTH=False
+
+    restart: unless-stopped
