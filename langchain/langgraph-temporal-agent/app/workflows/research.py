@@ -67,6 +67,10 @@ from datetime import timedelta
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
+# Lazy observability imports — Workflow code must stay deterministic
+# Observability helpers are called inside the workflow_trace context
+from app.infrastructure.observability.tracing import workflow_trace
+
 from app.activities import (
     execute_action,
     generate_proposal,
@@ -149,125 +153,139 @@ class ResearchWorkflow:
     async def run(self, request: ResearchRequest) -> ExecutionResult:
         """
         Execute the full research-and-approval workflow.
+
+        OBSERVABILITY BRIDGE (Phase 4):
+
+        The entire workflow execution is wrapped in ``workflow_trace()`` which
+        creates a root Langfuse trace identified by the workflow_id.  Each
+        activity automatically attaches to this trace via its session_id
+        (which defaults to workflow_id when observe_activity() is called).
         """
+        wf_id = workflow.info().workflow_id
+
         workflow.logger.info(
             "ResearchWorkflow started",
             question=request.question,
+            workflow_id=wf_id,
         )
 
-        # ---- Phase 1: Research (LangGraph inside Activity) ----
-        research_result: ResearchResult = await workflow.execute_activity(
-            research,
-            request,
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=2),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(minutes=2),
-                maximum_attempts=5,
-            ),
-        )
-
-        # ---- Phase 2: Verify sources (LangGraph inside Activity) ----
-        verified: VerifiedResearch = await workflow.execute_activity(
-            verify_sources,
-            research_result,
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=2),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(minutes=2),
-                maximum_attempts=5,
-            ),
-        )
-
-        # ---- Phase 3: Generate proposal (LangGraph inside Activity) ----
-        proposal: Proposal = await workflow.execute_activity(
-            generate_proposal,
-            verified,
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=2),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(minutes=2),
-                maximum_attempts=3,
-            ),
-        )
-
-        workflow.logger.info(
-            "Proposal generated",
-            title=proposal.title,
-        )
-
-        # ---- Phase 4: Wait for human approval (Temporal Signal) ----
-        #
-        # This wait is DURABLE.  If the Python worker crashes, restarts,
-        # or goes offline, Temporal retains the workflow in a WAITING
-        # state.  When a worker comes back online (or a new one starts),
-        # Temporal will resume the workflow from this point.
-        #
-        # No Python process is kept busy during the wait.
-
-        await workflow.wait_condition(
-            lambda: self.approval_received is not None,
-        )
-
-        if not self.approved:
-            workflow.logger.info(
-                "Workflow rejected by human approval. Terminating.",
-            )
-            return ExecutionResult(
-                workflow_id=workflow.info().workflow_id,
-                action=proposal.proposed_action,
-                success=False,
-                detail="Workflow rejected by human approval.",
-            )
-
-        workflow.logger.info("Workflow approved — proceeding to execution.")
-
-        # ---- Phase 5: Execute action ----
-        #
-        # Retry policy: short retries for transient failures, but no
-        # infinite retry loop.  Permanent failures (invalid request,
-        # auth failure, business rule violation) are raised with
-        # non_retryable=True inside the Activity and will fail immediately.
-        execution_result: ExecutionResult = await workflow.execute_activity(
-            execute_action,
-            args=(workflow.info().workflow_id, proposal.proposed_action),
-            start_to_close_timeout=timedelta(minutes=2),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=1),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(seconds=10),
-                maximum_attempts=3,
-            ),
-        )
-
-        # ---- Phase 6: Notify user ----
-        #
-        # Notification Activity uses internal deduplication keys.
-        # A small retry budget protects against transient delivery failures.
-        await workflow.execute_activity(
-            notify_user,
-            args=(
-                workflow.info().workflow_id,
-                (
-                    f"Your research on '{request.question}' has been completed. "
-                    f"Action: {execution_result.detail}"
+        # Wrap all activity calls in the workflow-level trace.
+        # This creates a Langfuse trace with session_id = workflow_id.
+        # Activities within this block automatically bridge to this trace.
+        with workflow_trace(workflow_id=wf_id):
+            # ---- Phase 1: Research (LangGraph inside Activity) ----
+            research_result: ResearchResult = await workflow.execute_activity(
+                research,
+                request,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(minutes=2),
+                    maximum_attempts=5,
                 ),
-            ),
-            start_to_close_timeout=timedelta(minutes=1),
-            retry_policy=RetryPolicy(
-                initial_interval=timedelta(seconds=1),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(seconds=5),
-                maximum_attempts=2,
-            ),
-        )
+            )
 
-        workflow.logger.info(
-            "ResearchWorkflow completed successfully.",
-            workflow_id=workflow.info().workflow_id,
-        )
+            # ---- Phase 2: Verify sources (LangGraph inside Activity) ----
+            verified: VerifiedResearch = await workflow.execute_activity(
+                verify_sources,
+                research_result,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(minutes=2),
+                    maximum_attempts=5,
+                ),
+            )
 
-        return execution_result
+            # ---- Phase 3: Generate proposal (LangGraph inside Activity) ----
+            proposal: Proposal = await workflow.execute_activity(
+                generate_proposal,
+                verified,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=2),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(minutes=2),
+                    maximum_attempts=3,
+                ),
+            )
+
+            workflow.logger.info(
+                "Proposal generated",
+                title=proposal.title,
+            )
+
+            # ---- Phase 4: Wait for human approval (Temporal Signal) ----
+            #
+            # This wait is DURABLE.  If the Python worker crashes, restarts,
+            # or goes offline, Temporal retains the workflow in a WAITING
+            # state.  When a worker comes back online (or a new one starts),
+            # Temporal will resume the workflow from this point.
+            #
+            # No Python process is kept busy during the wait.
+
+            await workflow.wait_condition(
+                lambda: self.approval_received is not None,
+            )
+
+            if not self.approved:
+                workflow.logger.info(
+                    "Workflow rejected by human approval. Terminating.",
+                )
+                return ExecutionResult(
+                    workflow_id=wf_id,
+                    action=proposal.proposed_action,
+                    success=False,
+                    detail="Workflow rejected by human approval.",
+                )
+
+            workflow.logger.info("Workflow approved — proceeding to execution.")
+
+            # ---- Phase 5: Execute action ----
+            #
+            # Retry policy: short retries for transient failures, but no
+            # infinite retry loop.  Permanent failures (invalid request,
+            # auth failure, business rule violation) are raised with
+            # non_retryable=True inside the Activity and will fail immediately.
+            execution_result: ExecutionResult = await workflow.execute_activity(
+                execute_action,
+                args=(wf_id, proposal.proposed_action),
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=10),
+                    maximum_attempts=3,
+                ),
+            )
+
+            # ---- Phase 6: Notify user ----
+            #
+            # Notification Activity uses internal deduplication keys.
+            # A small retry budget protects against transient delivery failures.
+            await workflow.execute_activity(
+                notify_user,
+                args=(
+                    wf_id,
+                    (
+                        f"Your research on '{request.question}' has been completed. "
+                        f"Action: {execution_result.detail}"
+                    ),
+                ),
+                start_to_close_timeout=timedelta(minutes=1),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=5),
+                    maximum_attempts=2,
+                ),
+            )
+
+            workflow.logger.info(
+                "ResearchWorkflow completed successfully.",
+                workflow_id=wf_id,
+            )
+
+            return execution_result
