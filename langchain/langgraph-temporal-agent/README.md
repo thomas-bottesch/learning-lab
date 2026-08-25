@@ -22,6 +22,16 @@ graph TB
         PG["Proposal Graph"]
     end
 
+    subgraph "Observability Layer"
+        LT["Langfuse v4 Trace"]
+        WS["Workflow Span"]
+        SA1["research Activity Span"]
+        SA2["verify Activity Span"]
+        SA3["proposal Activity Span"]
+        SA4["execute Action Span"]
+        SA5["notify User Span"]
+    end
+
     subgraph "External Systems"
         LLM["LLM / Search API"]
         DB["External Storage / DB"]
@@ -48,6 +58,21 @@ graph TB
 
     TW -->|Activity| NA
     NA -->|send| NOTIFY
+
+    %% Observability connections
+    TW -.->|workflow_trace()| LT
+    LT --> WS
+    WA -.->|observe_activity()| SA1
+    VW -.->|observe_activity()| SA2
+    PW -.->|observe_activity()| SA3
+    EA -.->|observe_activity()| SA4
+    NA -.->|observe_activity()| SA5
+    SA1 --> LT
+    SA2 --> LT
+    SA3 --> LT
+    SA4 --> LT
+    SA5 --> LT
+    WS --> LT
 ```
 
 ## Why This Architecture?
@@ -177,14 +202,45 @@ python -m app.worker
 
 All connect to the same Temporal Server and listen on the same task queue (`research-agent`). Temporal distributes tasks across workers automatically.
 
+## DevContainer
+
+This project runs inside a **DevContainer**. All dependencies and services are installed within the container environment. To work on this project:
+
+1. Open the project in VS Code with the Dev Containers extension installed.
+2. The container will automatically build using the configuration in `.devcontainer/`.
+
 ## Prerequisites
 
-- **Python 3.12+**
-- **Existing Temporal Server** (not managed by this project)
+Before opening the DevContainer, ensure the following are set up on the **host machine**:
 
-No Docker, Docker Compose, or Kubernetes setup required.
+1. **Kubernetes Cluster** — Install k3s on the host (Docker must be running):
+   ```bash
+   python host_config/k8s_cluster.py --start
+   ```
+   This installs a fresh k3s cluster bound to `172.17.0.1` (the Docker bridge IP).
 
-## Installation
+2. **Docker** — Required for both k3s and running Langfuse/Temporal as containers.
+
+### Installing Services Inside the DevContainer
+
+Once inside the DevContainer, run the install scripts:
+
+```bash
+# Install Local Temporal Server
+./install_temporal.sh install
+
+# Install Local Langfuse Server
+./install_langfuse.sh install
+```
+
+These scripts configure and start the respective services using the k3s cluster on the host.
+
+## Installation (Package)
+
+```bash
+cd langgraph-temporal-agent
+pip install -e .
+```
 
 ```bash
 cd langgraph-temporal-agent
@@ -303,7 +359,7 @@ Temporal Workflow
         Object Storage (S3 / GCS / Azure Blob)
 ```
 
-The models in [`app/models.py`](app/models.py) include an `external_doc_ids` field for this purpose.
+The models in [`app/domain/models.py`](app/domain/models.py) include an `external_doc_ids` field for this purpose.
 
 ## LangGraph Persistence
 
@@ -349,28 +405,75 @@ idempotency_key = f"{workflow_id}:execute-action"
 langgraph-temporal-agent/
 │
 ├── app/
-│   ├── __init__.py       # Package marker
-│   ├── models.py         # Pydantic data models
-│   ├── graphs.py         # LangGraph graphs
-│   ├── activities.py     # Temporal Activities
-│   ├── workflow.py       # Temporal Workflow
-│   ├── worker.py         # Worker entry point
-│   └── client.py         # CLI client
+│   ├── __init__.py               # Package marker
+│   ├── domain/                   # Domain layer
+│   │   └── models.py             # Pydantic data models
+│   ├── workflows/                # Temporal Workflows
+│   │   ├── __init__.py
+│   │   └── research.py           # ResearchWorkflow definition
+│   ├── activities/               # Temporal Activities
+│   │   ├── __init__.py
+│   │   ├── research.py           # research activity
+│   │   ├── verification.py       # verify_sources activity
+│   │   ├── proposal.py           # generate_proposal activity
+│   │   └── side_effects.py       # execute_action, notify_user
+│   ├── graphs/                   # LangGraph graphs (inside Activities)
+│   │   ├── __init__.py
+│   │   ├── research.py
+│   │   ├── verification.py
+│   │   └── proposal.py
+│   ├── infrastructure/           # Infrastructure layer
+│   │   ├── __init__.py
+│   │   ├── llm.py                # LLM client abstraction
+│   │   └── observability/        # Observability layer (Langfuse v4)
+│   │       ├── __init__.py
+│   │       ├── client.py         # Client singleton + NoOp fallback
+│   │       ├── config.py         # Config loader (.langfuse.env)
+│   │       ├── tracing.py        # observe_activity, workflow_trace
+│   │       ├── context.py        # Observation context helpers
+│   │       ├── metadata.py       # Execution ID helpers
+│   │       ├── production.py     # Production readiness checks
+│   │       ├── redaction.py      # Input sanitization
+│   │       ├── callbacks.py      # LangGraph callback integration
+│   │       ├── graphs.py         # Graph observation wrappers
+│   │       ├── llm_tracing.py    # LLM-specific tracing helpers
+│   │       └── evaluations.py    # LLM evaluation hooks
+│   ├── client.py                 # CLI client
+│   └── worker.py                 # Worker entry point
 │
 ├── tests/
-│   ├── test_graphs.py    # LangGraph unit tests
-│   └── test_workflow.py  # Temporal workflow tests
+│   ├── conftest.py               # Pytest fixtures (_setup_test_env, _reset_langfuse)
+│   ├── test_graphs.py            # LangGraph unit tests
+│   ├── test_workflow.py          # Temporal workflow tests
+│   └── test_langfuse_standalone.py  # Langfuse v4 integration tests
 │
-├── pyproject.toml        # Project dependencies
-├── .env.example          # Environment template
-└── README.md             # This file
+├── .langfuse.env                 # Langfuse credentials (generated by install_langfuse.sh)
+├── .env.example                  # Environment template
+├── pyproject.toml                # Project dependencies
+├── install_langfuse.sh           # Local Langfuse server installer
+├── install_temporal.sh           # Local Temporal server installer
+└── README.md                     # This file
 ```
 
-## Future: Kubernetes Deployment
+## Local Development Cluster (k3s)
 
-This project can be deployed on Kubernetes by:
+This project uses **k3s** (lightweight Kubernetes) as the local development cluster. The `host_config/k8s_cluster.py` script manages the cluster lifecycle on the host machine:
 
-1. Building a container image from a simple `Dockerfile`:
+```bash
+# Start the k3s cluster on the host (run once)
+python host_config/k8s_cluster.py --start
+
+# Stop the cluster when done
+python host_config/k8s_cluster.py --stop
+```
+
+The cluster binds to the Docker bridge IP (`172.17.0.1`) so that services installed inside the DevContainer are reachable via the host network.
+
+### Deploying Workers to k3s
+
+For production or staging deployments, workers can be deployed to any Kubernetes cluster:
+
+1. Build a container image:
    ```dockerfile
    FROM python:3.12-slim
    WORKDIR /app
@@ -379,7 +482,7 @@ This project can be deployed on Kubernetes by:
    CMD ["python", "-m", "app.worker"]
    ```
 
-2. Creating a Kubernetes Deployment with the appropriate replicas:
+2. Create a Kubernetes Deployment:
    ```yaml
    apiVersion: apps/v1
    kind: Deployment
@@ -403,51 +506,111 @@ This project can be deployed on Kubernetes by:
                name: temporal-credentials
    ```
 
-3. Storing Temporal credentials in a Kubernetes Secret.
+3. Store Temporal connection details in a Kubernetes Secret.
 
-No infrastructure code is included in this project — it assumes an existing Temporal Server.
+Both Langfuse and Temporal Servers are managed as part of the dev environment via `install_langfuse.sh` and `install_temporal.sh`.
 
-## Future: Langfuse Integration
+## Observability — Langfuse v4 Integration
 
-Langfuse can be added for observability:
+The project includes a production-grade observability layer using **Langfuse v4** (OpenTelemetry-based). Tracing is configured via `.langfuse.env` and activated with `LANGFUSE_TEST_TRACING=1`.
 
-1. Install Langfuse SDK:
-   ```bash
-   pip install langfuse
-   ```
+### Architecture
 
-2. Configure tracing in Activities:
-   ```python
-   from langfuse import Langfuse
+```
+Trace ID = create_trace_id(seed=workflow_id)
+│
+├─ Root Span: "research-workflow" (workflow_trace context manager)
+│   │
+│   ├─ Span: "research-activity" (activity.research → observe_activity)
+│   │   └─ LLM generations from LangGraph callbacks
+│   │
+│   ├─ Span: "verify_sources-activity" (activity.verify_sources)
+│   │   └─ LLM generations from LangGraph callbacks
+│   │
+│   ├─ Span: "generate_proposal-activity" (activity.generate_proposal)
+│   │   └─ LLM generations from LangGraph callbacks
+│   │
+│   ├─ Span: "execute_action-activity" (activity.execute_action)
+│   │
+│   └─ Span: "notify_user-activity" (activity.notify_user)
+```
 
-   lf = Langfuse()
+### How It Works
 
-   @activity.defn
-   async def research(request: ResearchRequest) -> ResearchResult:
-       trace = lf.trace(name="research-activity")
-       trace.update_input(request.model_dump())
+**Workflow creates root trace** ([`app/workflows/research.py`](app/workflows/research.py)):
+```python
+with workflow_trace(workflow_id=wf_id):
+    # Registers trace_id in global map + creates root span
+    ...
+```
 
-       graph = build_research_graph()
-       result = await graph.ainvoke(...)
+**Activities join the trace** ([`app/infrastructure/observability/tracing.py`](app/infrastructure/observability/tracing.py)):
+```python
+with observe_activity(
+    name="research",
+    input_data=safe_input,
+    session_id=_wf_id,  # Bridges to workflow trace via workflow_id lookup
+) as obs:
+    obs.set_output({"findings_count": len(findings)})
+```
 
-       trace.update_output(result.model_dump())
-       trace.flush()
+### Cross-Thread Propagation
 
-       return result
-   ```
+Temporal workers execute activities in separate threads. The observability layer uses a **global workflow→trace_id map** to propagate trace IDs across thread boundaries:
 
-3. Set environment variables:
-   ```env
-   LANGFUSE_PUBLIC_KEY=your-key
-   LANGFUSE_SECRET_KEY=your-secret
-   LANGFUSE_HOST=https://cloud.langfuse.com
-   ```
+1. `workflow_trace()` calls `register_workflow_trace(wf_id, trace_id)` before executing activities
+2. `observe_activity()` calls `resolve_trace_id(activity.workflow_id)` to find the active trace
+3. Thread-local state handles intra-thread nesting (within same activity)
 
-Langfuse traces would show:
-- Each Activity invocation
-- LangGraph graph execution within Activities
-- Input/output of each phase
-- Timing and error information
+### Configuration
+
+Copy `.langfuse.env` (generated by `install_langfuse.sh`) or set environment variables:
+
+```env
+LANGFUSE_PUBLIC_KEY=lf_pk_xxx
+LANGFUSE_SECRET_KEY=lf_sk_xxx
+LANGFUSE_HOST=http://localhost:3000
+LANGFUSE_BASE_URL=http://localhost:3000
+LANGFUSE_TEST_TRACING=1  # Enable tracing in tests
+```
+
+### Running Tests with Tracing
+
+```bash
+# Without tracing (default)
+pytest tests/test_workflow.py -v
+
+# With Langfuse tracing enabled
+LANGFUSE_TEST_TRACING=1 pytest tests/test_workflow.py -v
+
+# Standalone integration tests (requires Langfuse server)
+LANGFUSE_TEST_TRACING=1 pytest tests/test_langfuse_standalone.py -v
+```
+
+### Trace URL
+
+After running with tracing, verify traces at:
+```
+http://localhost:3000/project/local-project/traces/<trace_id>
+```
+
+### Module Structure
+
+```
+app/infrastructure/observability/
+├── __init__.py               # Package marker
+├── client.py                 # Client singleton + NoOp fallback
+├── config.py                 # Config loader (.langfuse.env, env vars)
+├── tracing.py                # observe_activity, workflow_trace
+├── context.py                # Observation context helpers
+├── metadata.py               # Execution ID helpers
+├── production.py             # Production readiness checks
+├── redaction.py              # Input sanitization
+├── callbacks.py              # LangGraph callback integration
+├── graphs.py                 # Graph observation wrappers
+├── llm_tracing.py            # LLM-specific tracing helpers
+└── evaluations.py            # LLM evaluation hooks
+```
 
 ## Temporal Determinism — Critical Rules
 
