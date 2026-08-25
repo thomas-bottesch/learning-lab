@@ -60,13 +60,13 @@ graph TB
     NA -->|send| NOTIFY
 
     %% Observability connections
-    TW -.->|workflow_trace()| LT
+    TW -.- wfTrace .-> LT
     LT --> WS
-    WA -.->|observe_activity()| SA1
-    VW -.->|observe_activity()| SA2
-    PW -.->|observe_activity()| SA3
-    EA -.->|observe_activity()| SA4
-    NA -.->|observe_activity()| SA5
+    WA -.- obsAct .-> SA1
+    VW -.- obsAct .-> SA2
+    PW -.- obsAct .-> SA3
+    EA -.- obsAct .-> SA4
+    NA -.- obsAct .-> SA5
     SA1 --> LT
     SA2 --> LT
     SA3 --> LT
