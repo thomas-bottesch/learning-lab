@@ -37,7 +37,6 @@ Usage:
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from temporalio import activity
@@ -59,6 +58,31 @@ def build_execution_id(
     return f"{workflow_id}:{activity_id}:{attempt}"
 
 
+def _extract_retry_info(info: activity.Info) -> dict[str, Any]:
+    """Extract retry policy metadata from ``info.retry_policy``."""
+    retry_policy = info.retry_policy
+    if retry_policy is None:
+        return {}
+
+    result: dict[str, Any] = {}
+
+    for attr, key in [
+        ("maximum_attempts", "temporal.retry.maximum_attempts"),
+        ("maximum_per_second", "temporal.retry.maximum_per_second"),
+        ("backoff_coefficient", "temporal.retry.backoff_coefficient"),
+        ("maximum_interval", "temporal.retry.maximum_interval"),
+    ]:
+        val = getattr(retry_policy, attr, None)
+        if val is not None:
+            result[key] = val
+
+    initial_interval = getattr(retry_policy, "initial_interval", None)
+    if initial_interval is not None:
+        result["temporal.retry.initial_interval"] = str(initial_interval)
+
+    return result
+
+
 def get_temporal_metadata() -> dict[str, Any]:
     """
     Extract all available Temporal metadata into a flat dict.
@@ -74,34 +98,25 @@ def get_temporal_metadata() -> dict[str, Any]:
             "temporal.task_queue": ...,
             "temporal.namespace": ...,
             "temporal.attempt": ...,
-            "temporal.retry.status": ...,  # if retried
-            "temporal.retry.last_attempt": ...,
-            "temporal.retry.total_attempts": ...,
+            "temporal.retry.*": ...,       # if retry policy is configured
         }
     """
     info = activity.info()
 
-    result: dict[str, Any] = {
+    # ``Info.run_id`` was renamed to ``Info.workflow_run_id`` in SDK v1.31+.
+    run_id = getattr(info, "workflow_run_id", None)
+
+    return {
         "temporal.workflow_id": info.workflow_id,
-        "temporal.run_id": info.run_id,
+        "temporal.run_id": run_id,
         "temporal.workflow_type": info.workflow_type,
         "temporal.activity_id": info.activity_id,
         "temporal.activity_type": info.activity_type,
         "temporal.task_queue": info.task_queue,
         "temporal.namespace": info.namespace,
         "temporal.attempt": info.attempt,
+        **_extract_retry_info(info),
     }
-
-    # Include retry information if available (rule #8)
-    retry = info.retry
-    if retry:
-        result["temporal.retry.status"] = (
-            retry.status.name if hasattr(retry.status, "name") else str(retry.status)
-        )
-        result["temporal.retry.last_attempt"] = retry.last_attempt
-        result["temporal.retry.total_attempts"] = retry.total_attempts
-
-    return result
 
 
 def build_workflow_context(workflow_id: str | None = None) -> dict[str, Any]:
@@ -129,4 +144,9 @@ def get_or_build_workflow_id() -> str:
 
     Used as the session_id for Langfuse traces.
     """
-    return activity.info().workflow_id
+    wid = activity.info().workflow_id
+    if wid is None:
+        raise RuntimeError(
+            "Cannot determine workflow_id — not running inside a workflow"
+        )
+    return wid

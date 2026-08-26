@@ -280,7 +280,7 @@ OPENAI_API_KEY=
 ### Start the Worker
 
 ```bash
-export TEMPORAL_ADDRESS=172.17.0.1:7233
+export TEMPORAL_ADDRESS=localhost:7233
 export TEMPORAL_NAMESPACE=default
 export TEMPORAL_TASK_QUEUE=research-agent
 
