@@ -221,13 +221,12 @@ install() {
             echo
             echo "==> Stopping Langfuse port-forward..."
             kill "$port_forward_pid" 2>/dev/null || true
-            wait "$port_forward_pid" 2>/dev/null || true
         fi
 
         rm -f "${values_file:-}"
     }
 
-    trap cleanup EXIT INT TERM
+    trap cleanup INT TERM
 
     check_prerequisites
 
@@ -473,19 +472,22 @@ EOF
     chmod 600 "$ENV_FILE"
 
     # =========================================================================
-    # Start port-forward
+    # Start port-forward (background, detached from script lifecycle)
     # =========================================================================
 
     echo
     echo "==> Starting Langfuse port-forward..."
 
-    kubectl port-forward \
+    nohup kubectl port-forward \
         --namespace "$NAMESPACE" \
         "svc/langfuse-web" \
         "${LOCAL_PORT}:${SERVICE_PORT}" \
         > /tmp/langfuse-port-forward.log 2>&1 &
 
     port_forward_pid="$!"
+
+    # Disown so the process survives after the script exits
+    disown "$port_forward_pid" 2>/dev/null || true
 
     # Give kubectl a moment to establish the connection and catch immediate
     # failures such as "address already in use".
@@ -501,7 +503,7 @@ EOF
     fi
 
     # =========================================================================
-    # Finished
+    # Finished — exit now, port-forward continues in background
     # =========================================================================
 
     echo
@@ -529,11 +531,9 @@ EOF
     echo " Port-forward PID:"
     echo "   ${port_forward_pid}"
     echo
-    echo " Press Ctrl+C to stop Langfuse port-forward."
+    echo " To stop Langfuse port-forward, run:"
+    echo "   kill ${port_forward_pid}"
     echo
-
-    # Keep the script alive so Ctrl+C actually stops the port-forward.
-    wait "$port_forward_pid"
 }
 
 # =============================================================================
