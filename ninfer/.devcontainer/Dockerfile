@@ -60,6 +60,7 @@ RUN apt-get update && apt-get install -y \
     zstd \
     ca-certificates \
     locales \
+    npm \
     docker-ce-cli \
     && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
     && locale-gen en_US.UTF-8 \

@@ -10,6 +10,7 @@ set -euo pipefail
 REPO_URL="https://github.com/Neroued/ninfer.git"
 BUILD_DIR="/tmp/ninfer-build"
 IMAGE_TAG="ninfer:local"
+CHECKOUT_ID="09212c8"
 
 echo "=== NInfer Docker Build Script ==="
 echo ""
@@ -24,12 +25,15 @@ fi
 echo "Cloning NInfer repository to $BUILD_DIR ..."
 git clone "$REPO_URL" "$BUILD_DIR"
 
+
+
 echo "Repository cloned successfully."
 
 # Build the Docker image
 echo ""
 echo "Building Docker image '$IMAGE_TAG' ..."
 cd "$BUILD_DIR"
+git checkout "$CHECKOUT_ID"
 docker build --tag "$IMAGE_TAG" .
 
 echo ""

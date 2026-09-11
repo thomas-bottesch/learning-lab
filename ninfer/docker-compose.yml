@@ -21,18 +21,22 @@ services:
 
     command:
       - ninfer-serve
-      # - /models/qwen3_8_27b_nvfp4.ninfer
-      - /models/qwen3_6_35b_a3b.ninfer
+      - /models/qwen3_8_27b_nvfp4.ninfer
+      # - /models/qwen3_6_35b_a3b.ninfer
       - --host
       - "0.0.0.0"
       - --port
       - "8080"
       - --max-context
-      - "250000"
+      - "240000"
+      - --kv-capacity
+      - "240000"
+      - --max-concurrency
+      - "2"
       - --prefill-chunk
       - "1024"
       - --kv-dtype
-      - int8
+      - fp8
       - --spec
       - mtp
       - --draft-tokens
@@ -40,6 +44,11 @@ services:
       - --lm-head-draft
       - --log-stats-interval-ms
       - "1000"
+      - --preserve-thinking
+      - --host-kv-mib
+      - "8192"
+      - --device-state-slots
+      - "2"
 
     restart: unless-stopped
 
